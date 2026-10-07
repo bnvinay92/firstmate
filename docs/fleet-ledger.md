@@ -6,7 +6,7 @@ It is the stable, documented hook for firstmate status; this page is its contrac
 ## Turning it on and off
 
 Create the presence flag `config/fleet-ledger` in a firstmate home to turn the ledger on, and delete it to turn the ledger off.
-The flag is local, gitignored, per home, and not inherited by second mate homes, so each home that should publish a ledger needs its own flag.
+The flag is local and gitignored, and the primary home's flag is inherited by its second mate homes, so each second mate home publishes its own ledger whenever the primary's does.
 While the flag is absent, each producer performs one file-existence test and nothing else: no process starts and nothing is written.
 
 ## The file
