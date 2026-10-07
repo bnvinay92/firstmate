@@ -118,7 +118,7 @@ exclusion_reason() {
     fm-herdr-session-cleanup.test.sh)
       printf '%s\n' 'session-start task/presentation lock matrix; keep serial until dedicated concurrent proof'
       ;;
-    fm-daemon.test.sh|fm-guard-stale-banner.test.sh|fm-pi-watch-extension.test.sh|\
+    fm-daemon.test.sh|fm-guard-stale-banner.test.sh|\
     fm-supervision-events.test.sh|fm-turnend-guard.test.sh|fm-wake-daemon-lifecycle-e2e.test.sh|\
     fm-wake-queue.test.sh|fm-watch-checkpoint.test.sh|fm-watch-triage.test.sh|\
     fm-watcher-lock.test.sh)
@@ -128,9 +128,8 @@ exclusion_reason() {
     fm-afk-launch.test.sh)
       printf '%s\n' 'AFK lifecycle / inject path; exclusive daemon and pane control'
       ;;
-    fm-afk-pi-herdr-return-e2e.test.sh|\
-    fm-codex-continuity-live-e2e.test.sh|fm-grok-continuity-live-e2e.test.sh|\
-    fm-opencode-primary-live-e2e.test.sh|fm-pi-primary-live-e2e.test.sh|\
+    fm-codex-continuity-live-e2e.test.sh|\
+    fm-opencode-primary-live-e2e.test.sh|\
     fm-quota-array-dispatch-live-e2e.test.sh|fm-send-secondmate-marker-herdr-e2e.test.sh|\
     fm-sessionstart-instruction-refresh-live-e2e.test.sh)
       printf '%s\n' 'live harness opt-in; never default parallel CI'
@@ -170,10 +169,8 @@ tests/fm-composer-ghost.test.sh
 tests/fm-composer-lib.test.sh
 tests/fm-crew-state.test.sh
 tests/fm-ensure-agents-md.test.sh
-tests/fm-grok-harness.test.sh
 tests/fm-herdr-lab.test.sh
 tests/fm-lint.test.sh
-tests/fm-pi-primary-types.test.sh
 tests/fm-pr-merge.test.sh
 tests/fm-review-diff.test.sh
 tests/fm-send-popup-settle.test.sh
@@ -210,7 +207,6 @@ fm-wake-queue.test.sh
 fm-afk-inject-e2e.test.sh
 fm-backend-herdr-smoke.test.sh
 fm-backend-cmux-smoke.test.sh
-fm-pi-primary-live-e2e.test.sh
 fm-quota-array-dispatch-live-e2e.test.sh
 EOF
 }

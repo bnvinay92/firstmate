@@ -451,7 +451,7 @@ A home with no processed marker, including an upgrade or switch from the supervi
 
 ### Ownership and verdict rules
 
-The generated [Pi supervision protocol](supervision-protocols/pi.md) owns event ownership for merged outcomes and main's acknowledgement duty.
+The generated Pi supervision protocol owns event ownership for merged outcomes and main's acknowledgement duty.
 Deterministic entry delivery owns captain visibility.
 
 The branch prompt's "Verdict: routine or captain" section owns the classification criteria, including task-level silence eligibility and the rule to escalate doubt.

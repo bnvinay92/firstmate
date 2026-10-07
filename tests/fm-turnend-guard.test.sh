@@ -184,7 +184,6 @@ install_guard_scripts() {
   local dir=$1
   mkdir -p "$dir/bin"
   cp "$ROOT/bin/fm-turnend-guard.sh" "$dir/bin/fm-turnend-guard.sh"
-  cp "$ROOT/bin/fm-turnend-guard-grok.sh" "$dir/bin/fm-turnend-guard-grok.sh"
   cp "$ROOT/bin/fm-operational-input.sh" "$dir/bin/fm-operational-input.sh"
   cp "$ROOT/bin/fm-supervision-instructions.sh" "$dir/bin/fm-supervision-instructions.sh"
   cp "$ROOT/bin/fm-harness.sh" "$dir/bin/fm-harness.sh"
@@ -198,7 +197,7 @@ install_guard_scripts() {
   cp "$ROOT/bin/fm-cursor-lib.sh" "$dir/bin/fm-cursor-lib.sh"
   mkdir -p "$dir/docs"
   cp -R "$ROOT/docs/supervision-protocols" "$dir/docs/supervision-protocols"
-  chmod +x "$dir/bin/fm-turnend-guard.sh" "$dir/bin/fm-turnend-guard-grok.sh" "$dir/bin/fm-operational-input.sh" "$dir/bin/fm-supervision-instructions.sh" "$dir/bin/fm-harness.sh"
+  chmod +x "$dir/bin/fm-turnend-guard.sh" "$dir/bin/fm-operational-input.sh" "$dir/bin/fm-supervision-instructions.sh" "$dir/bin/fm-harness.sh"
 }
 
 mark_codex_hook_root() {
@@ -727,154 +726,6 @@ test_hook_runs_fast() {
   pass "fm-turnend-guard: runs well under the generous timing margin (${elapsed_s}s)"
 }
 
-test_grok_adapter_forces_one_resume_when_unhealthy() {
-  local dir fakebin log out status
-  dir=$(make_primary_dir "$TMP_ROOT/grok-adapter-block")
-  : > "$dir/state/task1.meta"
-  fakebin=$(fm_fakebin "$TMP_ROOT/grok-adapter-fakebin")
-  log="$TMP_ROOT/grok-adapter-call.log"
-  cat > "$fakebin/grok" <<EOF
-#!/usr/bin/env bash
-{
-  printf 'active=%s\n' "\${GROK_TURNEND_GUARD_ACTIVE:-}"
-  printf 'home=%s\n' "\${GROK_HOME:-}"
-  printf 'args:'
-  for arg in "\$@"; do
-    printf ' <%s>' "\$arg"
-  done
-  printf '\n'
-} >> "$log"
-EOF
-  chmod +x "$fakebin/grok"
-  out=$(printf '{"sessionId":"session-test","hookEventName":"stop"}' | PATH="$fakebin:$PATH" GROK_WORKSPACE_ROOT="$dir" bash "$dir/bin/fm-turnend-guard-grok.sh" 2>&1); status=$?
-  expect_code 0 "$status" "grok adapter must fail open after queuing a forced resume"
-  [ -z "$out" ] || fail "grok adapter printed output: $out"
-  assert_contains "$(cat "$log")" 'active=1' "grok adapter must mark its forced resume as loop-guarded"
-  assert_contains "$(cat "$log")" '<--resume>' "grok adapter must resume the current session"
-  assert_contains "$(cat "$log")" '<session-test>' "grok adapter must pass the hook session id"
-  assert_not_contains "$(cat "$log")" '<--permission-mode>' "grok adapter must not add a stronger permission mode"
-  assert_not_contains "$(cat "$log")" '<bypassPermissions>' "grok adapter must not bypass permissions on forced resume"
-  assert_contains "$(cat "$log")" 'FIRSTMATE_OP: v1 turn-end-guard: TURN WOULD END BLIND' "grok adapter must retain the typed guard kind"
-  pass "fm-turnend-guard-grok: forces one explicitly marked same-session resume when the shared predicate blocks"
-}
-
-test_grok_adapter_loop_guard_skips_resume() {
-  local dir fakebin log out status
-  dir=$(make_primary_dir "$TMP_ROOT/grok-adapter-loop")
-  : > "$dir/state/task1.meta"
-  fakebin=$(fm_fakebin "$TMP_ROOT/grok-adapter-loop-fakebin")
-  log="$TMP_ROOT/grok-adapter-loop-call.log"
-  cat > "$fakebin/grok" <<EOF
-#!/usr/bin/env bash
-printf 'called\n' >> "$log"
-EOF
-  chmod +x "$fakebin/grok"
-  out=$(printf '{"sessionId":"session-test","hookEventName":"stop"}' | PATH="$fakebin:$PATH" GROK_WORKSPACE_ROOT="$dir" GROK_TURNEND_GUARD_ACTIVE=1 bash "$dir/bin/fm-turnend-guard-grok.sh" 2>&1); status=$?
-  expect_code 0 "$status" "grok adapter must allow its own forced resume turn to end"
-  [ -z "$out" ] || fail "grok adapter printed output while loop-guarded: $out"
-  [ ! -e "$log" ] || fail "grok adapter spawned another resume while loop-guarded: $(cat "$log")"
-  pass "fm-turnend-guard-grok: legacy environment loop guard prevents a nested resume loop"
-}
-
-test_grok_adapter_native_false_blocks_without_resume() {
-  local dir fakebin log out status
-  dir=$(make_primary_dir "$TMP_ROOT/grok-native-false")
-  : > "$dir/state/task1.meta"
-  fakebin=$(fm_fakebin "$TMP_ROOT/grok-native-false-bin")
-  log="$TMP_ROOT/grok-native-false.log"
-  printf '#!/usr/bin/env bash\nprintf called >> %q\n' "$log" > "$fakebin/grok"
-  chmod +x "$fakebin/grok"
-  out=$(printf '%s' '{"sessionId":"native","stopHookActive":false}' | PATH="$fakebin:$PATH" GROK_WORKSPACE_ROOT="$dir" bash "$dir/bin/fm-turnend-guard-grok.sh" 2>&1); status=$?
-  expect_code 2 "$status" "native stopHookActive=false must return the shared blocking status"
-  assert_contains "$out" 'TURN WOULD END BLIND' "native block must pass shared guard feedback to Grok"
-  [ ! -e "$log" ] || fail "native path started grok --resume"
-  pass "fm-turnend-guard-grok: native false delegates blocking feedback with zero resume processes"
-}
-
-test_grok_adapter_native_true_allows_without_resume() {
-  local dir fakebin log out status
-  dir=$(make_primary_dir "$TMP_ROOT/grok-native-true")
-  : > "$dir/state/task1.meta"
-  fakebin=$(fm_fakebin "$TMP_ROOT/grok-native-true-bin")
-  log="$TMP_ROOT/grok-native-true.log"
-  printf '#!/usr/bin/env bash\nprintf called >> %q\n' "$log" > "$fakebin/grok"
-  chmod +x "$fakebin/grok"
-  out=$(printf '%s' '{"sessionId":"native","stopHookActive":true}' | PATH="$fakebin:$PATH" GROK_WORKSPACE_ROOT="$dir" bash "$dir/bin/fm-turnend-guard-grok.sh" 2>&1); status=$?
-  expect_code 0 "$status" "native stopHookActive=true must allow the bounded continuation to stop"
-  [ -z "$out" ] || fail "native true produced output: $out"
-  [ ! -e "$log" ] || fail "native true started grok --resume"
-  pass "fm-turnend-guard-grok: native true remains bounded and starts no resume process"
-}
-
-test_grok_adapter_snake_case_native_and_camel_precedence() {
-  local dir out status
-  dir=$(make_primary_dir "$TMP_ROOT/grok-native-spellings")
-  : > "$dir/state/task1.meta"
-  out=$(printf '%s' '{"sessionId":"native","stop_hook_active":false}' | GROK_WORKSPACE_ROOT="$dir" bash "$dir/bin/fm-turnend-guard-grok.sh" 2>&1); status=$?
-  expect_code 2 "$status" "typed snake_case false must select native blocking"
-  assert_contains "$out" 'TURN WOULD END BLIND' "snake_case native block lost feedback"
-  out=$(printf '%s' '{"sessionId":"native","stopHookActive":true,"stop_hook_active":false}' | GROK_WORKSPACE_ROOT="$dir" bash "$dir/bin/fm-turnend-guard-grok.sh" 2>&1); status=$?
-  expect_code 0 "$status" "camelCase true must win over snake_case false"
-  out=$(printf '%s' '{"sessionId":"native","stopHookActive":false,"stop_hook_active":true}' | GROK_WORKSPACE_ROOT="$dir" bash "$dir/bin/fm-turnend-guard-grok.sh" 2>&1); status=$?
-  expect_code 2 "$status" "camelCase false must win over snake_case true"
-  pass "fm-turnend-guard-grok: both spellings are typed and camelCase has deterministic precedence"
-}
-
-test_grok_adapter_invalid_inputs_start_neither_path() {
-  local dir fakebin log payload out status
-  dir=$(make_primary_dir "$TMP_ROOT/grok-invalid-inputs")
-  : > "$dir/state/task1.meta"
-  fakebin=$(fm_fakebin "$TMP_ROOT/grok-invalid-bin")
-  log="$TMP_ROOT/grok-invalid.log"
-  printf '#!/usr/bin/env bash\nprintf called >> %q\n' "$log" > "$fakebin/grok"
-  chmod +x "$fakebin/grok"
-  for payload in \
-    ' ' \
-    '{' \
-    '{"sessionId":"x","stopHookActive":"false"}' \
-    '{"sessionId":"x","stop_hook_active":1}' \
-    '{"sessionId":"x"}{"sessionId":"y"}' \
-    '{"sessionId":"x","stopHookActive":false}{"sessionId":"y","stopHookActive":false}' \
-    '{"sessionId":"x","stopHookActive":"bad","stopHookActive":false}' \
-    '{"sessionId":"x","stop_hook_active":false,"stop_hook_active":false}' \
-    '{"sessionId":"x","sessionId":"y"}'
-  do
-    out=$(printf '%s' "$payload" | PATH="$fakebin:$PATH" GROK_WORKSPACE_ROOT="$dir" bash "$dir/bin/fm-turnend-guard-grok.sh" 2>&1); status=$?
-    expect_code 0 "$status" "invalid Grok payload must conservatively allow without choosing a path"
-    [ -z "$out" ] || fail "invalid Grok payload produced output: $out"
-  done
-  [ ! -e "$log" ] || fail "invalid Grok payload started a resume process"
-  out=$(printf '%s' '{"sessionId":"x","stopHookActive":false}' | PATH="$fakebin:$PATH" GROK_WORKSPACE_ROOT="$TMP_ROOT/missing-grok-root" bash "$dir/bin/fm-turnend-guard-grok.sh" 2>&1); status=$?
-  expect_code 0 "$status" "missing shared-guard prerequisite must conservatively allow"
-  [ -z "$out" ] || fail "missing prerequisite produced output: $out"
-  [ ! -e "$log" ] || fail "missing prerequisite started a resume process"
-  pass "fm-turnend-guard-grok: malformed, invalidly typed, and missing-prerequisite payloads start neither path"
-}
-
-test_grok_adapter_missing_jq_and_no_supervision_allow() {
-  local dir fakebin log out status tool tool_path
-  dir=$(make_primary_dir "$TMP_ROOT/grok-nojq")
-  : > "$dir/state/task1.meta"
-  fakebin=$(fm_fakebin "$TMP_ROOT/grok-nojq-bin")
-  log="$TMP_ROOT/grok-nojq.log"
-  for tool in bash cat printf; do
-    tool_path=$(command -v "$tool") || fail "test host must provide $tool"
-    ln -s "$tool_path" "$fakebin/$tool"
-  done
-  printf '#!/usr/bin/env bash\nprintf called >> %q\n' "$log" > "$fakebin/grok"
-  chmod +x "$fakebin/grok"
-  out=$(printf '%s' '{"sessionId":"x","stopHookActive":false}' | PATH="$fakebin" GROK_WORKSPACE_ROOT="$dir" bash "$dir/bin/fm-turnend-guard-grok.sh" 2>&1); status=$?
-  expect_code 0 "$status" "missing jq must conservatively allow"
-  [ -z "$out" ] || fail "missing jq produced output: $out"
-  [ ! -e "$log" ] || fail "missing jq started a resume process"
-
-  dir=$(make_primary_dir "$TMP_ROOT/grok-native-no-work")
-  out=$(printf '%s' '{"sessionId":"x","stopHookActive":false}' | GROK_WORKSPACE_ROOT="$dir" bash "$dir/bin/fm-turnend-guard-grok.sh" 2>&1); status=$?
-  expect_code 0 "$status" "healthy no-supervision-needed native stop must allow"
-  [ -z "$out" ] || fail "no-supervision-needed native stop produced output: $out"
-  pass "fm-turnend-guard-grok: missing jq and no-supervision-needed stops stay silent and bounded"
-}
-
 # Grok loads Claude-compatible settings, so a TRACKED .claude/settings.json entry
 # that also has a .grok/hooks/ counterpart must refuse to run under Grok, or the
 # home gets a duplicate path. The regression this pins: the guard once tested
@@ -1058,122 +909,6 @@ EOF
   expect_code 0 "$status" "OpenCode plugin must run the guard from worktree even when directory is elsewhere"
   [ -z "$out" ] || fail "OpenCode plugin worktree-root test printed output: $out"
   pass ".opencode primary plugin: guard path is anchored to worktree, not directory"
-}
-
-test_pi_extension_injects_once_per_logical_agent_run() {
-  local repo home ext log out status
-  repo="$TMP_ROOT/pi-logical-run-root"
-  home="$TMP_ROOT/pi-logical-run-home"
-  ext="$repo/.pi/extensions/fm-primary-turnend-guard.ts"
-  log="$TMP_ROOT/pi-logical-run-guard.log"
-  mkdir -p "$repo/.pi/extensions/lib" "$repo/bin" "$home/state"
-  cp "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts" "$ext"
-  cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$repo/.pi/extensions/lib/fm-operational-input.ts"
-  cp "$ROOT/bin/fm-operational-input.sh" "$repo/bin/fm-operational-input.sh"
-  cat > "$repo/bin/fm-turnend-guard.sh" <<'SH'
-#!/usr/bin/env bash
-cat >/dev/null
-printf 'guard\n' >> "${FM_GUARD_LOG:?}"
-printf 'logical-run guard fired\n' >&2
-exit 2
-SH
-  cat > "$repo/bin/fm-arm-pretool-check.sh" <<'SH'
-#!/usr/bin/env bash
-exit 0
-SH
-  chmod +x "$repo/bin/fm-turnend-guard.sh" "$repo/bin/fm-arm-pretool-check.sh"
-  out=$(PLUGIN="$ext" FM_HOME="$home" FM_GUARD_LOG="$log" node --input-type=module 2>&1 <<'EOF'
-import { readFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
-
-const handlers = new Map();
-let prompts = 0;
-const pi = {
-  on(event, handler) {
-    handlers.set(event, handler);
-  },
-  async sendUserMessage(message, options) {
-    prompts += 1;
-    if (!message.startsWith("\u2063FIRSTMATE_OP: v1 turn-end-guard: ")) throw new Error(`untyped operational prompt: ${message}`);
-    if (!message.includes("TURN WOULD END BLIND")) throw new Error(`unexpected prompt: ${message}`);
-    if (!message.includes("watcher cycle is missing, failed, or unhealthy")) throw new Error(`guard prompt omitted recovery-only state: ${message}`);
-    if (message.includes("Resume supervision according to the session-start operating block")) throw new Error(`guard prompt used ordinary continuity: ${message}`);
-    if (options?.deliverAs !== "followUp") throw new Error("guard prompt was not a follow-up");
-    await handlers.get("agent_settled")?.({ type: "agent_settled" }, {});
-  },
-};
-const mod = await import(pathToFileURL(process.env.PLUGIN).href);
-mod.default(pi);
-if (handlers.has("turn_end")) throw new Error("guard still treats internal Pi turns as logical runs");
-const settled = handlers.get("agent_settled");
-if (!settled) throw new Error("agent_settled handler was not registered");
-
-await settled({ type: "agent_settled" }, {});
-if (prompts !== 1) throw new Error(`no-tool run injected ${prompts} follow-ups`);
-
-for (let i = 0; i < 3; i += 1) {
-  await handlers.get("turn_end")?.({ type: "turn_end", turnIndex: i }, {});
-}
-await settled({ type: "agent_settled" }, {});
-if (prompts !== 2) throw new Error(`multi-tool run produced ${prompts - 1} follow-ups`);
-
-const guardRuns = readFileSync(process.env.FM_GUARD_LOG, "utf8").trim().split("\n").length;
-if (guardRuns !== 2) throw new Error(`guard predicate ran ${guardRuns} times for two logical runs`);
-EOF
-)
-  status=$?
-  expect_code 0 "$status" "Pi guard must inject once for no-tool and multi-tool logical runs"
-  [ -z "$out" ] || fail "Pi logical-run guard test printed output: $out"
-  pass ".pi primary extension: no-tool and multi-tool runs each inject exactly one guard follow-up"
-}
-
-test_pi_extension_retries_after_followup_delivery_failure() {
-  local repo home ext out status
-  repo="$TMP_ROOT/pi-delivery-failure-root"
-  home="$TMP_ROOT/pi-delivery-failure-home"
-  ext="$repo/.pi/extensions/fm-primary-turnend-guard.ts"
-  mkdir -p "$repo/.pi/extensions/lib" "$repo/bin" "$home/state"
-  cp "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts" "$ext"
-  cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$repo/.pi/extensions/lib/fm-operational-input.ts"
-  cp "$ROOT/bin/fm-operational-input.sh" "$repo/bin/fm-operational-input.sh"
-  cat > "$repo/bin/fm-turnend-guard.sh" <<'SH'
-#!/usr/bin/env bash
-cat >/dev/null
-printf 'delivery failure guard\n' >&2
-exit 2
-SH
-  cat > "$repo/bin/fm-arm-pretool-check.sh" <<'SH'
-#!/usr/bin/env bash
-exit 0
-SH
-  chmod +x "$repo/bin/fm-turnend-guard.sh" "$repo/bin/fm-arm-pretool-check.sh"
-  out=$(PLUGIN="$ext" FM_HOME="$home" node --input-type=module 2>&1 <<'EOF'
-import { pathToFileURL } from "node:url";
-
-const handlers = new Map();
-let attempts = 0;
-const pi = {
-  on(event, handler) {
-    handlers.set(event, handler);
-  },
-  async sendUserMessage() {
-    attempts += 1;
-    if (attempts === 1) throw new Error("synthetic delivery failure");
-    await handlers.get("agent_settled")?.({ type: "agent_settled" }, {});
-  },
-};
-const mod = await import(pathToFileURL(process.env.PLUGIN).href);
-mod.default(pi);
-const settled = handlers.get("agent_settled");
-await settled({ type: "agent_settled" }, {});
-await settled({ type: "agent_settled" }, {});
-if (attempts !== 2) throw new Error(`expected delivery retry, saw ${attempts} attempts`);
-EOF
-)
-  status=$?
-  expect_code 0 "$status" "Pi guard latch must reset after follow-up delivery failure"
-  [ -z "$out" ] || fail "Pi delivery-failure guard test printed output: $out"
-  pass ".pi primary extension: delivery failure resets the logical-run latch"
 }
 
 # --- --claude cooperative mode -----------------------------------------------
@@ -2233,19 +1968,10 @@ test_hook_silent_in_crewmate_worktree
 test_hook_silent_without_jq
 test_hook_silent_without_stdin
 test_hook_runs_fast
-test_grok_adapter_forces_one_resume_when_unhealthy
-test_grok_adapter_loop_guard_skips_resume
-test_grok_adapter_native_false_blocks_without_resume
-test_grok_adapter_native_true_allows_without_resume
-test_grok_adapter_snake_case_native_and_camel_precedence
-test_grok_adapter_invalid_inputs_start_neither_path
-test_grok_adapter_missing_jq_and_no_supervision_allow
 test_tracked_claude_entries_inert_under_grok
 test_codex_hook_uses_process_pwd_when_payload_cwd_is_outside_root
 test_codex_hook_ignores_nested_git_root_guard
 test_opencode_plugin_anchors_guard_to_worktree
-test_pi_extension_injects_once_per_logical_agent_run
-test_pi_extension_retries_after_followup_delivery_failure
 test_hook_claude_mode_reblocks_stop_hook_active_when_unhealthy
 test_hook_claude_mode_reblocks_x_mode_without_tasks
 test_hook_claude_mode_allows_when_autoarm_owner_alive

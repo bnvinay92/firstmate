@@ -22,6 +22,8 @@ This record owns concurrent isolation evidence for the portable parallel candida
 
 ## Candidate set
 
+The current set is the recorded run's candidates minus the deleted Grok and Pi harness suites, so every remaining candidate is covered by that run.
+
 - `tests/fm-arm-pretool-check.test.sh`
 - `tests/fm-backend-herdr.test.sh`
 - `tests/fm-brief.test.sh`
@@ -31,10 +33,8 @@ This record owns concurrent isolation evidence for the portable parallel candida
 - `tests/fm-composer-lib.test.sh`
 - `tests/fm-crew-state.test.sh`
 - `tests/fm-ensure-agents-md.test.sh`
-- `tests/fm-grok-harness.test.sh`
 - `tests/fm-herdr-lab.test.sh`
 - `tests/fm-lint.test.sh`
-- `tests/fm-pi-primary-types.test.sh`
 - `tests/fm-pr-merge.test.sh`
 - `tests/fm-review-diff.test.sh`
 - `tests/fm-send-popup-settle.test.sh`
