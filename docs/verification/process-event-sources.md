@@ -220,7 +220,7 @@ The generic runner and external-adapter path remain domain-neutral and create no
 The built-in task-owned Lavish exception validates existing task endpoint metadata and uses the existing steering-inbox backend doorbell to deliver a capture directly to that worker; it creates no new endpoint or backend protocol.
 Session-derived routing happens only inside the shared Lavish poll adapter, so it changes no harness or session-provider launch, registration, steering, or lifecycle interface.
 Built-in adapters extend the runner through `bin/fm-procevent-<adapter>.sh`; the `when` adapter also uses the runner library's locked registration publisher so its private trust state and source registration are serialized under one source boundary.
-Explicit external adapters instead use the single-capability contract in [`docs/extension-bindings.md`](../extension-bindings.md), with no filename discovery or package-supplied argv.
+Explicit external adapters instead use the single-capability contract in `docs/extension-bindings.md`, with no filename discovery or package-supplied argv.
 An adapter's `terminal` command is optional and defaults to keeping the source armed.
 Its `silent` command is optional in the same way and defaults to announcing every result, so an adapter with no notion of a routine no-op is unchanged.
 Its `autohandle` command is optional in the same way and defaults to leaving the captured result unacknowledged, so it keeps being announced to a handler exactly as before.

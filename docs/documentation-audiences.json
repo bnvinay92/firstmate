@@ -258,19 +258,7 @@
       "audience": "maintainer-architecture"
     },
     {
-      "path": "docs/extension-bindings.md",
-      "audience": "maintainer-architecture"
-    },
-    {
       "path": "docs/examples/crew-dispatch.json",
-      "audience": "operator-example"
-    },
-    {
-      "path": "docs/examples/process-event-extension/file-signal.mjs",
-      "audience": "operator-example"
-    },
-    {
-      "path": "docs/examples/process-event-extension/firstmate-extension.json",
       "audience": "operator-example"
     },
     {
@@ -412,10 +400,6 @@
     {
       "path": "docs/verification/trace-context.md",
       "audience": "maintainer-verification"
-    },
-    {
-      "path": "docs/voice-relay.md",
-      "audience": "operator-current"
     },
     {
       "path": "docs/watcher-continuity.md",
