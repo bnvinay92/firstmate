@@ -222,10 +222,10 @@ for t in tmux treehouse no-mistakes gh gh-axi tasks-axi; do
   chmod +x "$TMP_ROOT/childfake/$t"
 done
 
-run_child_teardown() { # <extra env assignments...>
+run_child_teardown() {
   local out rc=0
   write_child_meta
-  out=$(env "$@" PATH="$TMP_ROOT/childfake:$PATH" \
+  out=$(env PATH="$TMP_ROOT/childfake:$PATH" \
     FM_HOME="$REMOTE_HOME" FM_STATE_OVERRIDE="$REMOTE_HOME/state" \
     FM_DATA_OVERRIDE="$REMOTE_HOME/data" FM_CONFIG_OVERRIDE="$REMOTE_HOME/config" \
     "$REMOTE_ROOT/bin/fm-teardown.sh" work-child 2>&1) || rc=$?
