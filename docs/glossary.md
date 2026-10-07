@@ -37,6 +37,7 @@ Captain-facing chat translates several of these terms into plain words; `AGENTS.
 - **Brief** - a task's written instructions, created before spawn; `## Captain's intent` carries the captain's own words (`AGENTS.md` section 11, `bin/fm-brief.sh`).
 - **Steer** - text sent to a running crewmate or secondmate through `bin/fm-send.sh` (`AGENTS.md` section 7).
 - **Routed reply** - what a secondmate sends back to its parent: an answer, a report pointer, or a task outcome, via status or a document pointer (`AGENTS.md` section 7).
+- **Goal record** - a crewmate's `goals.md` beside its brief, listing each goal (an outcome the brief asks for) with its result and `origin:` chain for retrospectives; a home-local brief addition, not upstream Firstmate (`config/brief-include.md`).
 - **Status line** - a line a crewmate or secondmate appends to its `state/<task-id>.status` log; a wake event, not current-state truth (`AGENTS.md` sections 2 and 8, `bin/fm-classify-lib.sh`).
 - **Keyed decision** - a `needs-decision:` or `blocked:` status line carrying a key, which stays open until a `resolved` line with that key lands (`bin/fm-classify-lib.sh`, `bin/fm-send.sh`).
 
