@@ -1,23 +1,10 @@
 #!/usr/bin/env bash
-# tests/fm-remote-secondmate-parent-binding.test.sh - regression coverage for the
-# fm-remote-sm-cleanup-parent-binding-s1 scout report: finished-worker cleanup
-# inside a REMOTE second-mate home refused forever with "cannot resolve the
-# primary home ... durable parent binding", because the remote launch hands the
-# child the remote code checkout as its parent home (bin/fm-spawn.sh's sole
-# writer of FM_PUBLIC_FOLLOWUP_PRIMARY_HOME receives FM_HOME=$FM_ROOT from
-# bin/fm-remote-secondmate-control.sh's host-local launch), and that path can
-# never carry the parent's real state or registry.
-#
-# The fix (report section 7, captain-approved same-machine scope): a durable
-# .fm-secondmate-parent record, written once at seeding next to the
-# .fm-secondmate-home identity marker, names this home's route to its parent as
-# "local" or "remote". bin/fm-teardown.sh's cleanup gate reads it and treats a
-# remote parent as OUT OF SCOPE (never refuses purely for being cross-machine,
-# since the whole promised-public-reply subsystem is same-filesystem by
-# construction) while still refusing on a genuine same-filesystem signal
-# committed directly to this home's own .env file - never on an unrelated
-# process-environment export, which is what let the remote host's own login
-# shell mask into this home's binding before.
+# tests/fm-remote-secondmate-parent-binding.test.sh - regression coverage for a
+# REMOTE second-mate home's durable .fm-secondmate-parent record: remote
+# provisioning publishes it before the .fm-secondmate-home completion marker
+# and records the route as "remote", a finished child worker inside that home
+# still cleans up, and the parent-side task record refuses a publication target
+# that resolves outside its home.
 #
 # This drives the REAL remote route (fm-remote-home-seed.sh -> fm-on.sh ->
 # fm-remote-entrypoint.sh -> the host-local fm-remote-secondmate-control.sh ->
@@ -144,9 +131,6 @@ printf -- '- alpha [direct-PR] - alpha project (added 2026-08-04)\n' > "$PARENT/
 printf 'codex\n' > "$PARENT/config/secondmate-harness"
 printf 'tmux\n' > "$PARENT/config/backend"
 
-# The primary home is the X-mode / relay home: the captain's real activation.
-printf 'FMX_PAIRING_TOKEN=repro-token\n' > "$PARENT/.env"
-
 # --- deterministic SSH boundary, identical shape to the lifecycle e2e suite --
 cat > "$FAKEBIN/fake-ssh" <<'SH'
 #!/usr/bin/env bash
@@ -219,18 +203,6 @@ cmp -s "$REMOTE_HOME/.fm-secondmate-parent" <(
 remote_env "$ROOT/bin/fm-spawn.sh" ios --secondmate >/dev/null \
   || fail "real remote secondmate launch failed"
 
-STAGED_LAUNCH=$(sed -n "s/^pane send-text [^ ]* \\. '\([^']*\)' --session [^ ]*\$/\1/p" "$HERDR_LOG" | tail -1)
-[ -n "$STAGED_LAUNCH" ] && [ -f "$STAGED_LAUNCH" ] \
-  || fail "the remote launch did not deliver a staged command to assert against"
-DELIVERED_LINE=$(grep -F 'FM_PUBLIC_FOLLOWUP_PRIMARY_HOME' "$STAGED_LAUNCH" | tail -1 || true)
-DELIVERED=$(printf '%s\n' "$DELIVERED_LINE" | tr ' ' '\n' \
-  | sed -n "s/^FM_PUBLIC_FOLLOWUP_PRIMARY_HOME='\{0,1\}\([^']*\)'\{0,1\}\$/\1/p" | tail -1)
-[ -n "$DELIVERED" ] || fail "the remote launch did not deliver a primary-home binding to assert against"
-case "$DELIVERED" in
-  "$REMOTE_ROOT") : ;;
-  *) fail "test setup drifted: expected the remote code root to be delivered as the (wrong) parent binding, got: $DELIVERED" ;;
-esac
-
 # --- a finished child worker inside the remote secondmate home --------------
 CHILD_WT="$REMOTE_HOME/projects/alpha"
 mkdir -p "$REMOTE_HOME/state"
@@ -261,52 +233,10 @@ run_child_teardown() { # <extra env assignments...>
   CHILD_TEARDOWN_RC=$rc
 }
 
-# Case B-equivalent: the delivered (wrong) binding points at the remote code
-# root, and that root itself carries an X-mode .env - a plausible real-world
-# state (a captain who also runs Firstmate directly on the build Mac). Before
-# the fix this refused; the durable record now makes it out of scope.
-printf 'FMX_PAIRING_TOKEN=remote-host-token\n' > "$REMOTE_ROOT/.env"
-run_child_teardown FM_PUBLIC_FOLLOWUP_PRIMARY_HOME="$DELIVERED"
-rm -f "$REMOTE_ROOT/.env"
-[ "$CHILD_TEARDOWN_RC" -eq 0 ] \
-  || fail "a remote-routed child must allow cleanup when only the remote code root looks relay-active (rc=$CHILD_TEARDOWN_RC): $CHILD_TEARDOWN_OUT"
-assert_not_contains "$CHILD_TEARDOWN_OUT" "cannot resolve the primary home" \
-  "a cross-machine parent must never be reported as an unresolved binding"
-pass "a remote secondmate's finished worker cleans up when the remote code root's own .env looked relay-active"
-
-# Case C-equivalent: FMX_PAIRING_TOKEN exported directly in the process
-# environment, simulating the remote host's own login-shell export reaching the
-# agent's pane. fm_pf_relay_active's environment-wins rule would make this look
-# identical to a genuine same-home commitment; the fix must tell them apart by
-# reading only $FM_HOME/.env, never the process environment, once the durable
-# record says the parent is remote.
-run_child_teardown FM_PUBLIC_FOLLOWUP_PRIMARY_HOME="$DELIVERED" FMX_PAIRING_TOKEN=ambient-login-token
-[ "$CHILD_TEARDOWN_RC" -eq 0 ] \
-  || fail "a remote-routed child must allow cleanup when only an ambient exported token looks relay-active (rc=$CHILD_TEARDOWN_RC): $CHILD_TEARDOWN_OUT"
-assert_not_contains "$CHILD_TEARDOWN_OUT" "cannot resolve the primary home" \
-  "an ambient exported token from the remote host's own shell must never bind this child"
-pass "a remote secondmate's finished worker cleans up when only an ambient exported token looked relay-active"
-
-# Baseline: no signal anywhere. Must keep succeeding exactly as before the fix.
 run_child_teardown
 [ "$CHILD_TEARDOWN_RC" -eq 0 ] \
-  || fail "a remote-routed child with no relay signal anywhere must allow cleanup (rc=$CHILD_TEARDOWN_RC): $CHILD_TEARDOWN_OUT"
-pass "a remote secondmate's finished worker cleans up with no relay signal anywhere"
-
-# Protection-preserved case: THIS home's own .env file (not the process
-# environment, not the remote code root) carries a real token. That is a
-# genuine same-filesystem signal this child's own home could hold, so it must
-# still refuse even though the parent route is remote.
-printf 'FMX_PAIRING_TOKEN=child-own-token\n' > "$REMOTE_HOME/.env"
-run_child_teardown
-rm -f "$REMOTE_HOME/.env"
-[ "$CHILD_TEARDOWN_RC" -ne 0 ] \
-  || fail "a remote secondmate's own committed .env token must still refuse cleanup, got rc=0: $CHILD_TEARDOWN_OUT"
-assert_contains "$CHILD_TEARDOWN_OUT" "cannot resolve the primary home" \
-  "a genuine same-filesystem token on this home must remain an actionable refusal"
-assert_present "$REMOTE_HOME/state/work-child.meta" \
-  "a genuine refusal must preserve the child work metadata"
-pass "a remote secondmate's own committed relay token still refuses cleanup"
+  || fail "a remote-routed child must allow cleanup (rc=$CHILD_TEARDOWN_RC): $CHILD_TEARDOWN_OUT"
+pass "a remote secondmate's finished worker cleans up"
 
 FOREIGN_META="$TMP_ROOT/foreign-ios.meta"
 LOCAL_META="$PARENT/state/ios.meta"

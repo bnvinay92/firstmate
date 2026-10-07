@@ -483,7 +483,7 @@ strip_axi_help() {
 
 # Bound the dispatchable-now listing without rewriting the tool's own rendering:
 # `tasks-axi ready` rows are the indented lines under its ready[N]{...} header,
-# and every other line it prints (its count, its public-followup line) passes
+# and every other line it prints (its count and any summary lines) passes
 # through untouched. Whatever is cut is disclosed exactly.
 print_ready_queued_bounded() {
   local ready=$1
