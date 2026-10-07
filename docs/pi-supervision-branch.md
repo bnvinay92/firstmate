@@ -97,7 +97,7 @@ A successful row grant transfers ownership of exactly the currently branch-eligi
 What is never offered, or falls back to main:
 
 - While attended, a check-kind triggering close is never offered, even when other rows are eligible.
-  Check-kind closes are merge-confirmation polls, Relay mentions, credential/auth failures, and every other legitimately main-only class.
+  Check-kind closes are merge-confirmation polls, credential/auth failures, and every other legitimately main-only class.
 - When a triggering close has no acceptor (extension absent, branch broken), it keeps today's wake-to-main path.
 - Watcher-failure alarms always go to main, because only main can repair the watcher cycle.
 
@@ -481,7 +481,7 @@ They are excluded from what the branch may claim and left queued for main.
 Main is woken for each on its own watcher cycle, so nothing starves by being left behind.
 Under the away-posture record the branch claims them too ("Postures" below).
 
-Deferring the fleet review to main merely because some unrelated merge poll or Relay mention happened to be sitting unread put a routine review in the captain's chat for a reason that had nothing to do with the fleet.
+Deferring the fleet review to main merely because some unrelated merge poll happened to be sitting unread put a routine review in the captain's chat for a reason that had nothing to do with the fleet.
 That coupling is gone.
 
 What all-or-nothing still guarantees is unchanged: the branch takes every branch-ownable unread row or none of them.

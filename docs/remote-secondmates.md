@@ -402,8 +402,7 @@ SSH exit 255 preserves the route, because remote completion is unknown and must 
 
 Seeding also writes a durable `.fm-secondmate-parent` record next to the home's `.fm-secondmate-home` identity marker.
 That record names this home's route to its parent as `local` or `remote`.
-The promised-public-reply subsystem is same-filesystem by construction, so a remote route can never carry a delegated public-reply promise.
-`bin/fm-teardown.sh`'s cleanup gate reads this record to treat a remote parent as out of scope rather than an unresolved binding.
+`bin/fm-parent-channel-lib.sh` reads this record to resolve where the home's parent-channel outcomes go.
 
 ### Local and remote routes together
 
