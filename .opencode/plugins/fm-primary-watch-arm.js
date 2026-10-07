@@ -119,7 +119,6 @@ async function isPrimaryRoot(root, home) {
 
 function shouldArm(paths) {
   if (existsSync(`${paths.state}/.afk`)) return false;
-  if (existsSync(`${paths.config}/x-mode.env`)) return true;
   try {
     return readdirSync(paths.state).some((name) => name.endsWith(".meta"));
   } catch {
@@ -407,7 +406,7 @@ function spawnArm(paths, sessionID, client, predecessorArmPid = "") {
   };
   if (hostMode) env.FM_SUPERVISION_HOST_PRIMARY = "opencode";
   const command = hostMode ? '"$FM_ROOT_OVERRIDE/bin/fm-supervision-host.sh" park --restart' : '"$FM_ROOT_OVERRIDE/bin/fm-watch-arm.sh" --restart';
-  const armChild = spawn("bash", ["-lc", `config_dir="\${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"; [ -f "$config_dir/x-mode.env" ] && . "$config_dir/x-mode.env"; exec ${command}`], {
+  const armChild = spawn("bash", ["-lc", `exec ${command}`], {
     cwd: paths.root,
     env,
     stdio: ["ignore", "pipe", "pipe"],

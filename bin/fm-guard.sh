@@ -186,7 +186,7 @@ watcher_healthy=$FM_WATCHER_VERDICT_OK
 watcher_down_reason=$FM_WATCHER_VERDICT_REASON
 if [ "$needed" = false ]; then
   # Leave the unhealthy state (nothing riding on the watcher): clear so a later
-  # work or X-mode need + stale combination is a fresh episode even if the
+  # need + stale combination is a fresh episode even if the
   # beacon is still absent with the same key string.
   [ "$READ_ONLY" -eq 1 ] || fm_guard_clear_stale_banner
   exit 0
@@ -225,13 +225,10 @@ elif [ "$watcher_healthy" = false ]; then
     [ -e "$STATE/.afk" ] && afk=1
     queue_arg=0
     "$queue_pending" && queue_arg=1
-    x_mode=0
-    [ -f "$CONFIG/x-mode.env" ] && x_mode=1
     fix=$("$SCRIPT_DIR/fm-supervision-instructions.sh" \
       --read-only "$READ_ONLY" \
       --afk "$afk" \
       --afk-mode "$(fm_afk_mode "$STATE")" \
-      --x-mode "$x_mode" \
       --queue-pending "$queue_arg" \
       --repair-line 2>/dev/null || printf '%s\n' 'Repair missing watcher supervision according to the session-start operating block.')
     rule='━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
@@ -247,10 +244,8 @@ elif [ "$watcher_healthy" = false ]; then
         printf '●  %s task(s) in flight, but %s.\n' "$in_flight" "$watcher_cause"
       elif [ "$sources" -gt 0 ]; then
         printf '●  %s process-event source(s) registered, but %s.\n' "$sources" "$watcher_cause"
-      elif [ "$checks" -gt 0 ]; then
-        printf '●  %s registered custom check(s), but %s.\n' "$checks" "$watcher_cause"
       else
-        printf '●  X-mode relay polling needs supervision, but %s.\n' "$watcher_cause"
+        printf '●  %s registered custom check(s), but %s.\n' "$checks" "$watcher_cause"
       fi
       if [ "$READ_ONLY" -eq 1 ]; then
         printf '●  This read-only session should report the lapse, not repair it.\n'

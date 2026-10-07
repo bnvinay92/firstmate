@@ -21,8 +21,7 @@
 #                 "NUDGE_SECONDMATES: secondmate <id>: send failed: <reason>",
 #                 "BOOTSTRAP_INFO: nudged fm-<id> with '<message>'",
 #                 "SECONDMATE_LIVENESS: secondmate <id>: skipped: <reason>|respawn failed after <cause>: <reason>",
-#                 "SECONDMATE_HANDOFF: secondmate <id>: pending delivery: <n> item(s)",
-#                 "FMX: X mode on ..." or "FMX: X mode off ...".
+#                 "SECONDMATE_HANDOFF: secondmate <id>: pending delivery: <n> item(s)".
 #          When a RUNNING secondmate home is fast-forwarded, its target is
 #          firstmate's own current default-branch commit. A local worktree uses
 #          a purely local fast-forward with no origin fetch; a remote route hands
@@ -74,9 +73,6 @@
 #          guesses at malformed or unsafe existing files, and secondmate homes
 #          await the primary-authoritative inherited value instead of creating
 #          their own.
-#          X mode is OPTIONAL and inert unless FM_HOME/.env has a non-empty
-#          FMX_PAIRING_TOKEN. When opted in, bootstrap requires curl+jq, writes
-#          the relay poll shim and 30s cadence config, and prints an FMX line.
 #          Fleet sync fetches, fast-forwards safe default-branch states, reports
 #          recovered and STUCK clone drift, and prunes gone local branches; it is
 #          bounded by FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT when it is a non-empty
@@ -101,9 +97,9 @@
 #          The `code-root <file>` variant is a detect-only local check that runs
 #          even in a read-only session; detect_code_root_backlog_fork owns what
 #          it reports.
-#          Set FM_BOOTSTRAP_DETECT_ONLY=1 to skip the six MUTATING sweeps
+#          Set FM_BOOTSTRAP_DETECT_ONLY=1 to skip the five MUTATING sweeps
 #          (backlog_record_reconcile, secondmate_sync,
-#          secondmate_liveness_sweep, secondmate_handoff_resume, x_mode_setup,
+#          secondmate_liveness_sweep, secondmate_handoff_resume,
 #          fleet_sync) while still
 #          printing every read-only detect line
 #          above; the TANGLE line switches to advisory-only wording with no
@@ -111,8 +107,8 @@
 #          fm-session-start.sh's read-only path when another live session holds
 #          the fleet lock, so a second concurrent session never race-mutates
 #          secondmate homes, pending handoff outboxes and receiver wakes,
-#          X-mode artifacts, project clones, or repair instructions.
-#          Unset/0 (the default) runs all six sweeps - this flag is purely
+#          project clones, or repair instructions.
+#          Unset/0 (the default) runs all five sweeps - this flag is purely
 #          additive.
 #          Set FM_BOOTSTRAP_NETWORK to split this run by whether a step talks to
 #          the network, so a session start can print its digest from local reads
@@ -125,7 +121,7 @@
 #                 secondmate_handoff_resume, and fleet_sync.
 #            only - ONLY those network steps and nothing else. No tool detection,
 #                 no version floors, no tangle check, no backlog
-#                 reconciliation, no x_mode_setup: those already ran on the
+#                 reconciliation: those already ran on the
 #                 local pass.
 #          FM_BOOTSTRAP_DETECT_ONLY composes with it unchanged, so `only` plus
 #          detect-only is the read-only `gh auth status` probe on its own.
@@ -195,8 +191,6 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-secondmate-nudge-lib.sh"
 # shellcheck source=bin/fm-startup-memory-budget-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-startup-memory-budget-lib.sh"
-# shellcheck source=bin/fm-x-lib.sh disable=SC1091
-. "$SCRIPT_DIR/fm-x-lib.sh"
 # shellcheck source=bin/fm-backend.sh disable=SC1091
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-remote-readiness-lib.sh disable=SC1091
@@ -887,165 +881,6 @@ tool_version_at_least() {  # <tool> <min-version>
   version_parts_at_least "$parts" "$2"
 }
 
-x_mode_write_if_changed() {
-  local dest=$1 content=$2 mode=$3 parent tmp parent_device current_mode
-  parent=${dest%/*}
-  [ "$parent" != "$dest" ] || return 1
-  [ -d "$parent" ] && [ ! -L "$parent" ] || return 1
-  if [ "$(uname)" = Darwin ]; then
-    parent_device=$(/usr/bin/stat -f %d "$parent" 2>/dev/null) || return 1
-  else
-    parent_device=$(stat -c %d "$parent" 2>/dev/null) || return 1
-  fi
-  if [ -e "$dest" ] || [ -L "$dest" ]; then
-    fmx_single_link_file_valid "$dest" "$parent_device" || return 1
-    if [ "$(uname)" = Darwin ]; then
-      current_mode=$(/usr/bin/stat -f %Lp "$dest" 2>/dev/null) || return 1
-    else
-      current_mode=$(stat -c %a "$dest" 2>/dev/null) || return 1
-    fi
-    if [ "$current_mode" = "$mode" ] && cmp -s "$dest" <(printf '%s\n' "$content"); then
-      return 0
-    fi
-  fi
-  tmp=$(umask 077; mktemp "$parent/.fm-x-mode.XXXXXX" 2>/dev/null) || return 1
-  if ! printf '%s\n' "$content" > "$tmp" \
-    || ! chmod "$mode" "$tmp" \
-    || ! fmx_single_link_file_mode_valid "$tmp" "$mode" "$parent_device"; then
-    rm -f -- "$tmp"
-    return 1
-  fi
-  if { [ -e "$dest" ] || [ -L "$dest" ]; } \
-    && ! fmx_single_link_file_valid "$dest" "$parent_device"; then
-    rm -f -- "$tmp"
-    return 1
-  fi
-  if ! mv -f -- "$tmp" "$dest"; then
-    rm -f -- "$tmp"
-    return 1
-  fi
-  if ! fmx_single_link_file_mode_valid "$dest" "$mode" "$parent_device" \
-    || ! cmp -s "$dest" <(printf '%s\n' "$content"); then
-    rm -f -- "$dest"
-    return 1
-  fi
-}
-
-x_mode_artifact_present() {
-  [ -e "$1" ] || [ -L "$1" ]
-}
-
-x_mode_remove_artifact() {
-  local artifact=$1 parent=${1%/*}
-  x_mode_artifact_present "$artifact" || return 0
-  [ -d "$parent" ] && [ ! -L "$parent" ] || return 1
-  rm -f -- "$artifact" 2>/dev/null || return 1
-  ! x_mode_artifact_present "$artifact"
-}
-
-# X mode (opt-in): when this home's .env carries a non-empty FMX_PAIRING_TOKEN,
-# wire the relay poll into the existing authenticated watcher dispatch.
-# Drops two idempotent, gitignored artifacts:
-#   state/x-watch.check.sh - byte-static identity shim; the watcher validates
-#                            its bytes and invokes bin/fm-x-poll.sh directly
-#   config/x-mode.env      - exports FM_CHECK_INTERVAL=30, sourced by the watcher
-#                            arm so only an X instance polls at the 30s cadence
-# On opt-out (no token, or empty) it removes any such artifacts so the instance
-# reverts to the default 300s no-poll behavior. Absent a token AND with no leftover
-# artifacts it is a complete no-op (nothing written, nothing printed), so a non-X
-# user sees zero change. Prints one confirmation line on opt-in, and one on opt-out
-# only when it actually removed artifacts. It never touches the watcher itself;
-# applying a cadence transition to a running watcher is the caller's job via
-# the emitted harness-aware supervision repair instruction.
-x_mode_setup() {
-  local env_file token shim cadence shim_body cadence_body tool missing shim_home
-  env_file="$FM_HOME/.env"
-  shim="$STATE/x-watch.check.sh"
-  cadence="$CONFIG/x-mode.env"
-
-  token=
-  [ -f "$env_file" ] && token=$(fmx_env_get FMX_PAIRING_TOKEN "$env_file")
-
-  x_mode_remove_artifacts() {
-    local failed=0
-    x_mode_remove_artifact "$shim" || failed=1
-    x_mode_remove_artifact "$cadence" || failed=1
-    [ "$failed" -eq 0 ]
-  }
-
-  x_mode_supervision_repair() {
-    local out
-    out=$("$SCRIPT_DIR/fm-supervision-instructions.sh" --repair-line 2>/dev/null) \
-      || out='repair missing watcher supervision according to the session-start operating block.'
-    printf '%s\n' "$out"
-  }
-
-  if [ -z "$token" ]; then
-    # Opt-out (or never opted in): drop any X artifacts; stay silent unless we
-    # actually removed something.
-    if x_mode_artifact_present "$shim" || x_mode_artifact_present "$cadence"; then
-      if x_mode_remove_artifacts; then
-        echo "FMX: X mode off - removed relay poll shim and 30s cadence; default cadence applies on the next supervision cycle; $(x_mode_supervision_repair)"
-      else
-        echo "FMX: X mode off - failed to remove relay poll shim or 30s cadence"
-      fi
-    fi
-    return 0
-  fi
-
-  missing=0
-  for tool in curl jq; do
-    if ! command -v "$tool" >/dev/null 2>&1; then
-      echo "MISSING: $tool (install: $(install_cmd "$tool"))"
-      missing=1
-    fi
-  done
-  if [ "$missing" -ne 0 ]; then
-    if x_mode_artifact_present "$shim" || x_mode_artifact_present "$cadence"; then
-      if x_mode_remove_artifacts; then
-        echo "FMX: X mode off - missing relay poll dependencies; install them and rerun bootstrap"
-      else
-        echo "FMX: X mode off - failed to remove relay poll shim or 30s cadence after missing relay poll dependencies"
-      fi
-    fi
-    return 0
-  fi
-
-  fmx_arm_failed() {
-    if x_mode_remove_artifacts; then
-      echo "FMX: X mode off - failed to arm relay poll shim or 30s cadence"
-    else
-      echo "FMX: X mode off - failed to arm relay poll shim or 30s cadence; stale artifacts remain"
-    fi
-  }
-
-  mkdir -p "$STATE" "$CONFIG" 2>/dev/null || { fmx_arm_failed; return 0; }
-
-  case "$FM_HOME" in
-    /*) shim_home=$FM_HOME ;;
-    *)
-      shim_home=$(CDPATH='' cd -- "$FM_HOME" 2>/dev/null && pwd -P) \
-        || { fmx_arm_failed; return 0; }
-      ;;
-  esac
-  shim_body=$(fmx_poll_shim_content "$shim_home" "$FM_ROOT")
-  x_mode_write_if_changed "$shim" "$shim_body" 700 || { fmx_arm_failed; return 0; }
-  fmx_poll_shim_valid "$shim" "$shim_home" "$FM_ROOT" \
-    || { fmx_arm_failed; return 0; }
-
-  cadence_body=$(cat <<'EOF'
-# Auto-generated by fm-bootstrap.sh - X mode watcher cadence.
-# Source this before the active harness protocol starts a watcher process so
-# fm-watch.sh polls the X check every 30s. Non-X instances have no such file and
-# keep the default 300s cadence.
-export FM_CHECK_INTERVAL=30
-EOF
-)
-  x_mode_write_if_changed "$cadence" "$cadence_body" 600 || { fmx_arm_failed; return 0; }
-
-  echo "FMX: X mode on - relay poll armed via state/x-watch.check.sh; 30s watcher cadence in config/x-mode.env"
-}
-
 crew_dispatch_validate() {
   local file err verified_harnesses typed_key typed_active=false
   file="$CONFIG/crew-dispatch.json"
@@ -1601,8 +1436,6 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
       fm_timing_record phase handoff-delivery "$__fm_timing_stamp"
     fi
   fi
-  # x_mode_setup writes local Relay artifacts only and never leaves the machine.
-  local_phase && x_mode_setup
   # Adopt existing durable contribution links without making a network call.
   # Detection-only startup must never publish a check registration.
   if local_phase && command -v jq >/dev/null 2>&1 \

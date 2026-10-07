@@ -310,7 +310,6 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 SECONDMATE_REG="$DATA/secondmates.md"
 SUB_HOME_MARKER=".fm-secondmate-home"
-SUB_HOME_PARENT_MARKER=".fm-secondmate-parent"
 # A missing `.` target is not a teardown result. Stock Bash 3.2 can abort it
 # into an EXIT trap whose status is 0, and a newer Bash can print the
 # diagnostic and continue into cleanup. Refuse by name before sourcing.
@@ -338,11 +337,7 @@ for _teardown_source in \
   fm-classify-lib.sh \
   fm-gate-refuse-lib.sh \
   fm-pr-lib.sh \
-  fm-public-followup-lib.sh \
-  fm-x-lib.sh \
-  fm-env-lib.sh \
   fm-secondmate-registry-lib.sh \
-  fm-secondmate-parent-lib.sh \
   fm-pending-reply-lib.sh \
   fm-operational-input.sh \
   fm-marker-lib.sh \
@@ -373,12 +368,8 @@ unset _teardown_source
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
-# shellcheck source=bin/fm-public-followup-lib.sh
-. "$SCRIPT_DIR/fm-public-followup-lib.sh"
 # shellcheck source=bin/fm-secondmate-registry-lib.sh
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
-# shellcheck source=bin/fm-secondmate-parent-lib.sh
-. "$SCRIPT_DIR/fm-secondmate-parent-lib.sh"
 # shellcheck source=bin/fm-pending-reply-lib.sh
 . "$SCRIPT_DIR/fm-pending-reply-lib.sh"
 # shellcheck source=bin/fm-nm-run-lib.sh
@@ -1198,146 +1189,6 @@ if [ "$TEARDOWN_LEGACY_PENDING" = 1 ]; then
     TEARDOWN_META_SPAWN_GEN="legacy-$(date -u +%Y%m%dT%H%M%SZ)-$$"
   fi
   TEARDOWN_LEGACY_ACCEPTED=1
-fi
-
-PUBLIC_FOLLOWUP_HOME=$FM_HOME
-PUBLIC_FOLLOWUP_STATE=$STATE
-PUBLIC_FOLLOWUP_WORK_HOME=main
-PUBLIC_FOLLOWUP_PARENT_UNRESOLVED=0
-PUBLIC_FOLLOWUP_PARENT_RELAY_ACTIVE=0
-PUBLIC_FOLLOWUP_RELAY_ACTIVE=0
-public_followup_canonical_home() {
-  local home=$1
-  case "$home" in /*) ;; *) return 1 ;; esac
-  CDPATH='' cd -- "$home" 2>/dev/null && pwd -P
-}
-public_followup_resolve_primary_home() {
-  local parent=$1 child=$2 id=$3 parent_meta registry meta_home
-  fm_pf_home_id_valid "secondmate:$id" || return 1
-  parent=$(public_followup_canonical_home "$parent") || return 1
-  child=$(public_followup_canonical_home "$child") || return 1
-  [ "$parent" != "$child" ] || return 1
-  parent_meta="$parent/state/$id.meta"
-  [ -f "$parent_meta" ] && [ ! -L "$parent_meta" ] || return 1
-  [ "$(fm_meta_get "$parent_meta" kind)" = secondmate ] || return 1
-  meta_home=$(fm_meta_get "$parent_meta" home)
-  meta_home=$(CDPATH='' cd -- "$meta_home" 2>/dev/null && pwd -P) || return 1
-  [ "$meta_home" = "$child" ] || return 1
-  registry="$parent/data/secondmates.md"
-  secondmate_registry_validate_bindings "$registry" secondmate_registry_path_key "$id" "$child" || return 1
-  printf '%s\n' "$parent"
-}
-if [ -f "$FM_HOME/$SUB_HOME_MARKER" ]; then
-  SECOND_MATE_ID=$(sed -n '1p' "$FM_HOME/$SUB_HOME_MARKER")
-  # The durable parent record (written once at seeding, next to the identity
-  # marker) names this home's route to its parent: "local" when they share a
-  # filesystem, "remote" when the parent lives on another machine. Absent for
-  # a home seeded before this record existed, which preserves today's exact
-  # env-var-only behavior for that legacy home rather than guessing its route.
-  PARENT_ROUTE_FILE="$FM_HOME/$SUB_HOME_PARENT_MARKER"
-  PARENT_ROUTE_RECORD=absent
-  PARENT_ROUTE=
-  PARENT_ROUTE_HOME=
-  if [ -e "$PARENT_ROUTE_FILE" ] || [ -L "$PARENT_ROUTE_FILE" ]; then
-    PARENT_ROUTE_RECORD=invalid
-    if fm_secondmate_parent_record_parse "$PARENT_ROUTE_FILE"; then
-      PARENT_ROUTE=$FM_SECONDMATE_PARENT_ROUTE
-      PARENT_ROUTE_HOME=$FM_SECONDMATE_PARENT_HOME
-      PARENT_ROUTE_RECORD=valid
-    fi
-  fi
-  if [ "$PARENT_ROUTE_RECORD" = invalid ]; then
-    PUBLIC_FOLLOWUP_PARENT_UNRESOLVED=1
-  elif [ "$PARENT_ROUTE" = remote ]; then
-    # The entire promised-public-reply subsystem is same-filesystem by
-    # construction (bin/fm-public-followup-emit.sh header): a parent recorded
-    # on another machine can never hold a delegated promise for this child, so
-    # the delegated-parent path is out of scope and never refuses cleanup on
-    # its own. A token committed directly to THIS home's own .env is still a
-    # real, same-filesystem signal, so it is still checked - but read only
-    # from the file, never from the process environment, so an unrelated
-    # export in the remote host's own login shell cannot trigger it the way
-    # fm_pf_relay_active's environment-wins rule would.
-    if [ -f "$FM_HOME/.env" ]; then
-      HOME_ENV_TOKEN=$(fmx_env_get FMX_PAIRING_TOKEN "$FM_HOME/.env")
-      [ -z "$HOME_ENV_TOKEN" ] || PUBLIC_FOLLOWUP_PARENT_RELAY_ACTIVE=1
-    fi
-    if [ "$PUBLIC_FOLLOWUP_PARENT_RELAY_ACTIVE" = 1 ]; then
-      PUBLIC_FOLLOWUP_PARENT_UNRESOLVED=1
-    else
-      PUBLIC_FOLLOWUP_HOME=
-      PUBLIC_FOLLOWUP_STATE=
-    fi
-  elif [ "$PARENT_ROUTE" = local ]; then
-    PUBLIC_FOLLOWUP_PARENT_UNRESOLVED=1
-    PRIMARY_HOME_CANDIDATE=${FM_PUBLIC_FOLLOWUP_PRIMARY_HOME:-$PARENT_ROUTE_HOME}
-    PARENT_BINDINGS_MATCH=1
-    if [ -n "${FM_PUBLIC_FOLLOWUP_PRIMARY_HOME:-}" ]; then
-      LIVE_PARENT_HOME=$(public_followup_canonical_home \
-        "$FM_PUBLIC_FOLLOWUP_PRIMARY_HOME") || PARENT_BINDINGS_MATCH=0
-      DURABLE_PARENT_HOME=$(public_followup_canonical_home \
-        "$PARENT_ROUTE_HOME") || PARENT_BINDINGS_MATCH=0
-      if [ "$PARENT_BINDINGS_MATCH" = 1 ] \
-        && [ "$LIVE_PARENT_HOME" != "$DURABLE_PARENT_HOME" ]; then
-        PARENT_BINDINGS_MATCH=0
-      fi
-    fi
-    if [ "$PARENT_BINDINGS_MATCH" = 1 ] \
-      && fm_pf_home_id_valid "secondmate:$SECOND_MATE_ID"; then
-      PUBLIC_FOLLOWUP_WORK_HOME="secondmate:$SECOND_MATE_ID"
-      if PUBLIC_FOLLOWUP_HOME=$(public_followup_resolve_primary_home \
-          "$PRIMARY_HOME_CANDIDATE" "$FM_HOME" "$SECOND_MATE_ID"); then
-        PUBLIC_FOLLOWUP_STATE="$PUBLIC_FOLLOWUP_HOME/state"
-        PUBLIC_FOLLOWUP_PARENT_UNRESOLVED=0
-        if [ "$FORCE" != "--force" ] \
-          && fm_pf_relay_active "$PUBLIC_FOLLOWUP_HOME"; then
-          PUBLIC_FOLLOWUP_RELAY_ACTIVE=1
-        fi
-      else
-        PUBLIC_FOLLOWUP_HOME=
-        PUBLIC_FOLLOWUP_STATE=
-      fi
-    fi
-  else
-    # A home seeded before the durable record existed retains the legacy
-    # launch-time binding behavior unchanged.
-    PRIMARY_HOME_CANDIDATE=${FM_PUBLIC_FOLLOWUP_PRIMARY_HOME:-}
-    if [ -n "$PRIMARY_HOME_CANDIDATE" ]; then
-      if fm_pf_relay_active "$PRIMARY_HOME_CANDIDATE"; then
-        PUBLIC_FOLLOWUP_PARENT_RELAY_ACTIVE=1
-      fi
-    elif fm_pf_relay_active "$FM_HOME"; then
-      PUBLIC_FOLLOWUP_PARENT_RELAY_ACTIVE=1
-    fi
-    if [ "$PUBLIC_FOLLOWUP_PARENT_RELAY_ACTIVE" = 1 ]; then
-      PUBLIC_FOLLOWUP_PARENT_UNRESOLVED=1
-      if fm_pf_home_id_valid "secondmate:$SECOND_MATE_ID"; then
-        PUBLIC_FOLLOWUP_WORK_HOME="secondmate:$SECOND_MATE_ID"
-        if PUBLIC_FOLLOWUP_HOME=$(public_followup_resolve_primary_home \
-            "$PRIMARY_HOME_CANDIDATE" "$FM_HOME" "$SECOND_MATE_ID"); then
-          PUBLIC_FOLLOWUP_STATE="$PUBLIC_FOLLOWUP_HOME/state"
-          PUBLIC_FOLLOWUP_PARENT_UNRESOLVED=0
-          if [ "$FORCE" != "--force" ] \
-            && fm_pf_relay_active "$PUBLIC_FOLLOWUP_HOME"; then
-            PUBLIC_FOLLOWUP_RELAY_ACTIVE=1
-          fi
-        else
-          PUBLIC_FOLLOWUP_HOME=
-          PUBLIC_FOLLOWUP_STATE=
-        fi
-      fi
-    else
-      PUBLIC_FOLLOWUP_HOME=
-      PUBLIC_FOLLOWUP_STATE=
-    fi
-  fi
-elif [ "$KIND" = secondmate ]; then
-  PUBLIC_FOLLOWUP_WORK_HOME="secondmate:$ID"
-  if [ "$FORCE" != "--force" ] && fm_pf_relay_active "$FM_HOME"; then
-    PUBLIC_FOLLOWUP_RELAY_ACTIVE=1
-  fi
-elif [ "$FORCE" != "--force" ] && fm_pf_relay_active "$FM_HOME"; then
-  PUBLIC_FOLLOWUP_RELAY_ACTIVE=1
 fi
 
 default_branch() {
@@ -3385,44 +3236,6 @@ if [ "$KIND" = scout ] && [ "$FORCE" != "--force" ]; then
     echo "Inventory its report and any visual review through bin/fm-captain-hold.sh before teardown." >&2
     exit 1
   fi
-fi
-
-# A public commitment is not kept until its final reply lands in the ORIGINAL
-# thread, and this cleanup removes the task records that make the promise
-# reconcilable. Refuse while this home still owes a public reply for exactly this
-# work. Both gates live in bin/fm-public-followup-lib.sh, so a home that never
-# opted into the myfirstmate relay runs one [ -f ] test and nothing else here.
-if [ "$FORCE" != "--force" ] && [ "$PUBLIC_FOLLOWUP_PARENT_UNRESOLVED" = 1 ]; then
-  echo "REFUSED: cannot resolve the primary home for marked secondmate $SECOND_MATE_ID; refusing cleanup without its durable parent binding." >&2
-  exit 1
-fi
-if [ "$FORCE" != "--force" ] \
-  && [ -n "$PUBLIC_FOLLOWUP_STATE" ] \
-  && [ "$PUBLIC_FOLLOWUP_RELAY_ACTIVE" = 1 ] \
-  && fm_pf_has_registrations "$PUBLIC_FOLLOWUP_STATE"; then
-  if ! PUBLIC_FOLLOWUP_BLOCKING=$(FM_HOME="$PUBLIC_FOLLOWUP_HOME" FM_STATE_OVERRIDE="$PUBLIC_FOLLOWUP_STATE" \
-      "$SCRIPT_DIR/fm-public-followup.sh" guard-work "$PUBLIC_FOLLOWUP_WORK_HOME" "$ID" 2>/dev/null); then
-    echo "REFUSED: task $ID still owes a public reply through the myfirstmate relay." >&2
-    printf '%s\n' "$PUBLIC_FOLLOWUP_BLOCKING" >&2
-    echo "Deliver it with bin/fm-public-followup.sh deliver <obligation-id>, waive it with bin/fm-tasks-axi.sh public-followup waive, or use --force after explicit discard approval." >&2
-    exit 1
-  fi
-fi
-
-# Non-blocking: a delivered public loop is not a teardown refusal (guard-work
-# already passed), but tearing down a ship whose PR merged while a loop is still
-# open with nothing owed is the moment the drop is detectable.
-if [ "$KIND" = ship ] && [ -n "$PR_URL" ] \
-    && [ -n "$PUBLIC_FOLLOWUP_STATE" ] \
-    && [ "${PUBLIC_FOLLOWUP_RELAY_ACTIVE:-0}" = 1 ] \
-    && fm_pf_has_delivered_open_loops "$PUBLIC_FOLLOWUP_STATE"; then
-  echo "warning: an open public loop with nothing owed is still recorded in the consent-holding home while cleaning up ship task $ID. Hand it on with bin/fm-public-followup.sh rechain or close it with retire --reason." >&2
-fi
-
-# Non-blocking: the legacy Relay link is not guarded as a refusal.
-X_REQUEST=$(grep '^x_request=' "$META" 2>/dev/null | tail -1 | cut -d= -f2- || true)
-if [ -n "$X_REQUEST" ]; then
-  echo "warning: task $ID still carries an unreconciled Relay request link ($X_REQUEST) on its task record." >&2
 fi
 
 if [ "$BACKEND" = orca ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$FORCE" != "--force" ]; then

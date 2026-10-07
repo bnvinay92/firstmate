@@ -9,6 +9,7 @@ This record owns concurrent isolation evidence for the portable parallel candida
 - Date: 2026-08-20
 - Command: `bin/fm-test-isolation-proof.sh --jobs 4 --json /tmp/fm-isolation-proof.json`
 - Result: `FM_ISOLATION_SUMMARY total=24 failed=0 concurrency=4 duration_ms=113278`
+- `tests/fm-x-mode.test.sh` was later deleted together with Relay; the 23 remaining candidates are the ones this run covers.
 
 | Field | Value |
 |---|---|

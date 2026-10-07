@@ -6,7 +6,7 @@
 # no `data/<id>/brief.md`. Only `bin/fm-spawn.sh` writes that metadata, and
 # untracked project work contributes nothing to the in-flight branch of
 # bin/fm-supervision-lib.sh or bin/fm-turnend-guard.sh. So such work is not
-# merely unsupervised: absent an independent X-mode need, it makes the whole
+# merely unsupervised: absent another supervision need, it makes the whole
 # guard stack structurally inert, and it dies with the primary session instead
 # of living in its own backend session.
 #

@@ -28,14 +28,13 @@ fm_sup_stat_mtime() {
 #   FM_SUP_CHECKS         count of registered custom checks: a state/<id>.check.sh
 #                         with the state/<id>.check-trust binding that
 #                         bin/fm-check-register.sh writes. Task PR polls carry no
-#                         such binding and are torn down with their task, and the
-#                         relay shim keeps its own trust path, so neither counts
-#                         here. Presence of the binding is the whole test: whether
+#                         such binding and are torn down with their task, so they
+#                         do not count here. Presence of the binding is the whole test: whether
 #                         those bytes are still the registered ones is the check
 #                         sweep's call at execution time, and a home whose check
 #                         no longer validates needs the watcher precisely so the
 #                         sweep can report the rejection instead of going quiet.
-#   FM_SUP_NEEDED         true/false - in-flight work, an X-mode relay poll, a
+#   FM_SUP_NEEDED         true/false - in-flight work, a
 #                         registered event source (a source is a wait on an
 #                         external process, not a task, so it has no metadata),
 #                         or a registered custom check
@@ -66,14 +65,10 @@ fm_supervision_status() {
     [ -e "$check" ] || continue
     id=${check##*/}
     id=${id%.check.sh}
-    if [ "$id" = x-watch ]; then
-      continue
-    fi
     [ -e "$state/$id.check-trust" ] || continue
     FM_SUP_CHECKS=$((FM_SUP_CHECKS + 1))
   done
   if [ "$FM_SUP_IN_FLIGHT" -gt 0 ] \
-    || [ -f "$state/x-watch.check.sh" ] \
     || [ "$FM_SUP_SOURCES" -gt 0 ] \
     || [ "$FM_SUP_CHECKS" -gt 0 ]; then
     FM_SUP_NEEDED=true
