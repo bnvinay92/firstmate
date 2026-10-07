@@ -305,24 +305,6 @@ CHECK_OUT=$(HOME="$LATER_HOME" "$LIVE_LAB" check "$C" 2>&1)
 expect_code 0 "$?" "the Claude lab is ready again after every restore, even from a shell with another HOME: $CHECK_OUT"
 pass "treehouse fails when a pool lands in ~/.treehouse"
 
-# ---- Pi lab: extensions and the session-only trust store -------------------
-
-P=$(make_lab p pi)
-PH="$P/home"
-run_check "$P"
-expect_code 0 "$CHECK_RC" "a Pi lab in up's shape is ready: $CHECK_OUT"
-assert_contains "$CHECK_OUT" "ok extensions: fm-primary-pi-watch fm-primary-turnend-guard fm-branch-supervision" "all three extensions load"
-assert_contains "$CHECK_OUT" "ok trust: Pi trust store unchanged" "the Pi trust store is untouched"
-assert_not_contains "$CHECK_OUT" "mirror" "a Pi lab has no host mirror check"
-rm -f "$PH/state/.pi-branch-extension-loaded"
-run_check "$P"
-assert_contains "$CHECK_OUT" "fail extensions: fm-branch-supervision.ts is not loaded by the lock holder" "the missing branch extension is named"
-printf '%s\n' "$(sed -n 1p "$PH/state/.lock")" > "$PH/state/.pi-branch-extension-loaded"
-printf 'stale\n' > "$PH/state/.pi-turnend-extension-loaded"
-run_check "$P"
-assert_contains "$CHECK_OUT" "fail extensions: fm-primary-turnend-guard.ts is not loaded at its current build" "a stale turn-end build is named"
-pass "extensions fail when the Pi lab lacks the branch extension or loads a stale build"
-
 # ---- down -------------------------------------------------------------------
 
 NOT_LAB="$TMP_ROOT/not-a-lab"

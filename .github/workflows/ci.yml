@@ -214,6 +214,9 @@ jobs:
           # leaving a shard of the required lane unrun.
           FM_SERIAL_LANE: portable-serial-${{ matrix.shard }}of${{ strategy.job-total }}
           FM_SERIAL_SHARD: ${{ matrix.shard }}
+          # CI installs no supported harness, so the liveness drift guard
+          # would check nothing here; it runs on hosts that have one.
+          FM_HARNESS_LIVENESS_DRIFT: "0"
         run: |
           set -eu
           mkdir -p "$RUNNER_TEMP/fm-test"
