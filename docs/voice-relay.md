@@ -1,7 +1,7 @@
 # The spoken interface
 
-Talk to a voice agent that sits in front of the first mate. It answers questions
-about what is happening from the first mate's own records, and when you ask for
+Talk to a voice agent that sits in front of firstmate. It answers questions
+about what is happening from firstmate's own records, and when you ask for
 real work it says so out loud and queues the request rather than pretending to
 do it.
 
@@ -22,7 +22,7 @@ laptop                          this desktop                      AWS
 microphone --> fm-voice-client.py --(ssh)--> fm-voice-relay.py --> Nova Sonic 2
 speaker    <-------------------------------------------------      (your region)
                                         |
-                                        +--> the first mate's records (read)
+                                        +--> firstmate's records (read)
                                         +--> fm-inbox.sh note (queue real work)
 ```
 
@@ -270,7 +270,7 @@ these are the shapes.
   second question in a session is treated as an interruption, and an interrupted
   turn that reads the records produces no answer at all.
 - **Remembering the last question.** See above.
-- **Doing any project work.** Real work is queued for the first mate and the
+- **Doing any project work.** Real work is queued for firstmate and the
   agent says so out loud. It has no tool that changes a project.
 
 ## Cost

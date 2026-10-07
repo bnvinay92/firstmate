@@ -1,9 +1,9 @@
-# Remote second mates
+# Remote secondmates
 
-This page covers how to set up, provision, run, and retire a second mate whose Firstmate home lives on another host.
-It is for operators who run a remote second mate and for anyone checking its transport and safety behavior.
+This page covers how to set up, provision, run, and retire a secondmate whose Firstmate home lives on another host.
+It is for operators who run a remote secondmate and for anyone checking its transport and safety behavior.
 
-Remote second mates place a whole persistent Firstmate home on another SSH-reachable host.
+Remote secondmates place a whole persistent Firstmate home on another SSH-reachable host.
 The primary still owns routing and supervision, while the remote home owns its own projects, backlog, and workers.
 Firstmate does not support placing an individual worker remotely or failing a remote route over to a local replacement.
 
@@ -14,22 +14,22 @@ Firstmate does not support placing an individual worker remotely or failing a re
 | Prepare the primary and the remote host | [Prerequisites](#prerequisites) and [non-interactive tool contract](#non-interactive-tool-contract) |
 | Check whether a host is ready, or repair it | [Readiness, repair, and the human steps](#readiness-repair-and-the-human-steps) |
 | Create the route and the remote home | [Provision a route](#provision-a-route) |
-| Launch, recover, message, and read a remote second mate | [Normal operation](#normal-operation) |
+| Launch, recover, message, and read a remote secondmate | [Normal operation](#normal-operation) |
 | Move queued work to the remote home | [Backlog handoff](#backlog-handoff) |
 | Push configuration, relaunch, update, or retire | [Sync, update, and retirement](#sync-update-and-retirement) |
 | Run the tests or a real-host smoke test | [Verification](#verification) |
 
 ## Where the remote agent runs
 
-The remote second-mate agent itself always runs on the [Herdr backend](herdr-backend.md) in the shared `fm-remote` session.
+The remote secondmate agent itself always runs on the [Herdr backend](herdr-backend.md) in the shared `fm-remote` session.
 Every path that provisions or launches one refuses a host that is not ready for it.
 
 - `fm-remote` is reserved for remote fleet work and must not be used for personal work.
 - The user's interactive Herdr session remains `default` and is not a remote-secondmate prerequisite.
 - Herdr's remote-session server belongs to the host's own GUI login session rather than to the SSH connection.
   As a result, the agent's endpoint survives every disconnection the primary's supervision depends on.
-- Local second mates are unaffected and keep their ordinary backend and session selection.
-  So do the workers a remote second mate supervises inside its own home.
+- Local secondmates are unaffected and keep their ordinary backend and session selection.
+  So do the workers a remote secondmate supervises inside its own home.
 
 ## Prerequisites
 
@@ -128,7 +128,7 @@ It never touches a worker whose checkout still exists.
 ### What the remote account must provide
 
 - The remote account must provide the required toolchain, the selected worker runtime, the selected session backend, and credentials that work on that host.
-- A [worker account pin](configuration.md#worker-account-pin-configclaude-account-configpi-account) for the second mate or its workers lives in the remote home's own configuration on that host.
+- A [worker account pin](configuration.md#worker-account-pin-configclaude-account-configpi-account) for the secondmate or its workers lives in the remote home's own configuration on that host.
 - The origin URL named for each project must be reachable from the remote account, because projects are cloned on that host rather than copied from the primary.
 
 ## Non-interactive tool contract
@@ -214,7 +214,7 @@ chmod +x ~/.local/bin/tasks-axi
 
 ## Readiness, repair, and the human steps
 
-`bin/fm-remote-doctor.sh` is the single owner of what "ready for a remote second mate" means.
+`bin/fm-remote-doctor.sh` is the single owner of what "ready for a remote secondmate" means.
 
 ### Check a host
 
@@ -415,7 +415,7 @@ Use `bin/fm-home-seed.sh validate` to validate either form.
 
 ### Launch or recover
 
-Launch or recover the remote second mate with the same command used for a local route:
+Launch or recover the remote secondmate with the same command used for a local route:
 
 ```sh
 bin/fm-spawn.sh <id> --secondmate
@@ -441,7 +441,7 @@ All remote secondmates on one host share `fm-remote` and retain separate `2ndmat
 
 ### Liveness recovery
 
-Startup liveness recovery relaunches a dead or missing remote second mate through this same command.
+Startup liveness recovery relaunches a dead or missing remote secondmate through this same command.
 So recovery passes the same readiness gate rather than a weaker one.
 
 The watcher's liveness tick applies the identical rule during ordinary supervision through the shared `bin/fm-secondmate-liveness-lib.sh`:
@@ -603,7 +603,7 @@ Semantic callers preserve the route or pending request:
 - An operation that is not idempotent requires same-host reconciliation rather than a blind resend.
 - An unconfirmed steer may be retried only through the correlation-preserving command described above.
 
-An unavailable remote home is projected as unknown and is never replaced by a local second mate.
+An unavailable remote home is projected as unknown and is never replaced by a local secondmate.
 
 ## Backlog handoff
 
@@ -633,17 +633,17 @@ The primary records that remote nudge before delivery and retries it during lock
 Local secondmates retain their generation-specific local pointer contract.
 Remote transfers do not copy those primary-local instruction paths.
 
-### Relaunch a live remote second mate
+### Relaunch a live remote secondmate
 
-A live remote second mate is restarted with `relaunch`, which runs the ordinary [control plane](agent-control.md) on that host.
+A live remote secondmate is restarted with `relaunch`, which runs the ordinary [control plane](agent-control.md) on that host.
 The endpoint record there was written by a host-local launch and carries no remote placement.
 So the transaction, its checkpoint, and its postconditions are the local ones.
 
 The primary passes `<harness> <model|default|-> <effort|default|->` explicitly, using `default` when an axis has no parent pin.
-It passes them explicitly because `config/secondmate-harness` is not inherited into a second mate's home, and the file on that host belongs to a different home.
+It passes them explicitly because `config/secondmate-harness` is not inherited into a secondmate's home, and the file on that host belongs to a different home.
 Letting the far side re-resolve it would silently move the mate onto another runtime.
 SSH exit 255 leaves completion unknown and the route preserved, exactly as every other verb here.
-Move a live remote second mate onto a newly pinned harness, model, or effort with [`bin/fm-remote-secondmate-relaunch.sh`](../bin/fm-remote-secondmate-relaunch.sh) rather than calling `relaunch` through `fm-on.sh` directly: the host-local relaunch it drives can only rewrite the host's own endpoint record, so this wrapper reads the confirmed identity back from that record afterward and republishes the primary's own route metadata to match, the same way launch already records a fresh route.
+Move a live remote secondmate onto a newly pinned harness, model, or effort with [`bin/fm-remote-secondmate-relaunch.sh`](../bin/fm-remote-secondmate-relaunch.sh) rather than calling `relaunch` through `fm-on.sh` directly: the host-local relaunch it drives can only rewrite the host's own endpoint record, so this wrapper reads the confirmed identity back from that record afterward and republishes the primary's own route metadata to match, the same way launch already records a fresh route.
 
 ### Firstmate code convergence
 
@@ -655,9 +655,9 @@ A completed sync reports which watched instruction paths its advance changed.
 The primary needs that fact because it cannot diff a checkout it cannot read.
 It uses the fact to decide whether the running remote agent must be replaced to actually reload.
 
-### Retire a remote second mate
+### Retire a remote secondmate
 
-Retire a remote second mate with the normal guarded command:
+Retire a remote secondmate with the normal guarded command:
 
 ```sh
 bin/fm-teardown.sh <id>
@@ -769,7 +769,7 @@ For a real-host smoke test:
 
 1. Provision a disposable remote account and project.
 2. Run the doctor and its repair against that account.
-3. Launch the second mate.
+3. Launch the secondmate.
 4. Send one marked request.
 5. Verify its correlated reply and structured fleet projection.
 6. Simulate an unreachable host to confirm unknown-without-failover behavior.
