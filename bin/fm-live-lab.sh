@@ -2,7 +2,7 @@
 # fm-live-lab.sh - stand up, check, drive, and tear down one disposable live
 # supervision lab: a real lab main session on Claude or Pi, with the
 # supervision host (Claude) or branch (Pi) wired as a real home runs it,
-# optionally a real seeded local second mate and a real gated worker.
+# optionally a real seeded local secondmate and a real gated worker.
 #
 # Usage:
 #   fm-live-lab.sh up --harness claude|pi [--mate] [--worker]

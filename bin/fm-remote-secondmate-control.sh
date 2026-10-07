@@ -218,7 +218,7 @@ cmd_launch() {
   print_route "$id"
 }
 
-# Restart the second-mate agent this host runs, by executing the ORDINARY local
+# Restart the secondmate agent this host runs, by executing the ORDINARY local
 # control plane here. From this host's point of view the mate is a plain local
 # secondmate: its endpoint record under the private parent-route state directory
 # was written by a host-local fm-spawn and carries no remote_host= field, so

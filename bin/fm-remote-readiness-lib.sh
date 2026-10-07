@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# fm-remote-readiness-lib.sh - the remote second-mate readiness gate sequence.
+# fm-remote-readiness-lib.sh - the remote secondmate readiness gate sequence.
 #
 # Source this file and call:
 #   fm_remote_readiness_ensure <bin-dir> <secondmate-id>
