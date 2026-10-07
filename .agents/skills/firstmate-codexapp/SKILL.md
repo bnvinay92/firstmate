@@ -29,7 +29,7 @@ For helpers outside `bin/`, inspect the source or header before running `--help`
    Search exact names when needed: `create_thread`, `list_threads`, `read_thread`, `send_message_to_thread`, `archive`, and `set_thread_archived`.
 2. Confirm the target repository is already saved as a Codex Desktop project.
    No host tool currently creates Codex App projects for an agent, so the human must add the project in Desktop before a created thread can reliably land there.
-3. Do not create projectless threads for repo work.
+3. Do not create projectless threads for project work.
    If the project is absent, stop and ask for the project to be added or use a normal Firstmate backend instead.
 4. Decide whether this is a real Firstmate-managed task or a visible companion thread.
    A real task needs a task id, an isolated worktree or Desktop-owned cwd, a branch plan, and a writable `state/<id>.status` path.
@@ -46,11 +46,11 @@ git branch --show-current
 git log --oneline --max-count=3
 ```
 
-For writable repo work, instruct the worker to use the Codex-created current directory.
+For writable project work, instruct the worker to use the Codex-created current directory.
 Do not tell it to `cd` into the saved project checkout for edits, commits, no-mistakes, pushes, or PR work.
 
 When sending follow-up instructions, use `send_message_to_thread`.
-If the user types directly into the visible thread, treat that as authoritative and reconcile from `read_thread` instead of undoing it.
+If the captain types directly into the visible thread, treat that as authoritative and reconcile from `read_thread` instead of undoing it.
 
 ## Status Return Channel
 
