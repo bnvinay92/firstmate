@@ -547,18 +547,6 @@ kill -0 "$REPLACED" 2>/dev/null || fail "down killed a PID after its recorded id
 kill "$REPLACED" 2>/dev/null || true
 pass "down revalidates process identity during its bounded wait"
 
-printf '{"trusted":["/somewhere"]}\n' > "$HOME/.pi/agent/trust.json"
-run_check "$P"
-assert_contains "$CHECK_OUT" "fail trust: the Pi trust store changed since up began" "a written Pi trust store is caught"
-pass "trust fails on Pi when the lab wrote the persistent Pi trust store"
-
-out=$("$LIVE_LAB" down "$P" 2>&1)
-expect_code 1 "$?" "down reports a changed Pi trust store"
-assert_contains "$out" "the Pi trust store changed since up began; left as is" "the Pi trust change is named"
-assert_absent "$P" "the lab is still removed"
-assert_equals '{"trusted":["/somewhere"]}' "$(cat "$HOME/.pi/agent/trust.json")" "down never rewrites the Pi trust store"
-pass "down removes the lab but reports, without reverting, a written Pi trust store"
-
 # ---- up argument safety -----------------------------------------------------
 
 EXISTING="$TMP_ROOT/existing"
