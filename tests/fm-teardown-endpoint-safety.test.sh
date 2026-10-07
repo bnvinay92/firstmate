@@ -1327,57 +1327,6 @@ test_forced_secondmate_child_close_failure_still_refuses() {
   pass "fm-teardown: forced secondmate cleanup still refuses on a child endpoint close that failed"
 }
 
-test_orca_close_failure_refuses_even_under_force() {
-  local dir orca_free id=orca-strand rc
-  dir=$(make_case orca-close-failure)
-  orca_free=$(fm_test_base_path_sans "$PATH" orca)
-  ! PATH="$dir/fakebin:$orca_free" command -v orca >/dev/null 2>&1 \
-    || fail "the orca-free search path still resolved orca"
-  # The Orca arm reports a close its missing CLI never attempted, and the step
-  # right after this close removes the Orca worktree through that same CLI, so
-  # a forced continue could only die there having removed nothing. --force
-  # therefore changes nothing at this site.
-  fm_write_meta "$dir/home/state/$id.meta" \
-    "window=fm-$id" "endpoint_task_id=$id" "terminal=term-7" \
-    "worktree=$dir/nonexistent-worktree" "project=$dir/nonexistent-project" \
-    "backend=orca" "orca_worktree_id=worktree-9::/orca/worktree-9" "kind=ship" "mode=no-mistakes"
-
-  set +e
-  env -u TMUX -u TMUX_PANE \
-    FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" FM_RUNTIME_LOG="$dir/runtime.log" \
-    PATH="$dir/fakebin:$orca_free" "$TEARDOWN" "$id" --force \
-    > "$dir/orca-forced.out" 2> "$dir/orca-forced.err"
-  rc=$?
-  set -e
-  [ "$rc" -ne 0 ] || fail "a forced Orca cleanup continued past a close that never happened: $(cat "$dir/orca-forced.err")"
-  assert_grep "could not be closed" "$dir/orca-forced.err" \
-    "the forced Orca run did not report the close it could not make"
-  assert_no_grep "--force authorizes continuing" "$dir/orca-forced.err" \
-    "the forced Orca run announced a continue it cannot carry out"
-  assert_no_grep "teardown $id complete" "$dir/orca-forced.out" \
-    "the forced Orca run reported a completed cleanup"
-  assert_present "$dir/home/state/$id.meta" \
-    "the forced Orca refusal removed the only durable record naming the terminal"
-  # Unforced is not the interesting direction here: an Orca record whose CLI is
-  # gone never reaches this close without --force, because the worktree
-  # preflight above already refuses. --force is the only way in, and it still
-  # stops - unlike the generic site, where
-  # test_forced_teardown_continues_past_a_close_it_could_not_make proves the
-  # same operator authority does get through.
-  set +e
-  env -u TMUX -u TMUX_PANE \
-    FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" FM_RUNTIME_LOG="$dir/runtime.log" \
-    PATH="$dir/fakebin:$orca_free" "$TEARDOWN" "$id" \
-    > "$dir/orca-unforced.out" 2> "$dir/orca-unforced.err"
-  rc=$?
-  set -e
-  [ "$rc" -ne 0 ] || fail "an unforced Orca cleanup completed with no CLI to close its terminal: $(cat "$dir/orca-unforced.err")"
-  assert_present "$dir/home/state/$id.meta" \
-    "the unforced Orca refusal removed the only durable record naming the terminal"
-
-  pass "fm-teardown: an Orca close its missing CLI never attempted refuses even under --force, keeping the record naming the terminal"
-}
-
 test_already_gone_endpoint_still_completes_without_a_refusal() {
   local dir socket session='already gone' id=gone-task
   [ -n "$REAL_TMUX" ] || { echo "skip - tmux not installed"; return 0; }
@@ -1433,7 +1382,6 @@ test_failed_endpoint_close_refuses_before_removing_the_record
 test_forced_teardown_continues_past_a_close_it_could_not_make
 test_unreadable_close_read_refuses_while_a_definitive_absence_completes
 test_forced_secondmate_child_close_failure_still_refuses
-test_orca_close_failure_refuses_even_under_force
 test_already_gone_endpoint_still_completes_without_a_refusal
 test_bare_relative_origin_shares_project_lock_with_clone
 test_reused_pool_slot_refuses_before_touching_the_other_task

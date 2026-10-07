@@ -28,9 +28,6 @@
     "docs/wedge-alarm.md",
     "docs/tmux-backend.md",
     "docs/herdr-backend.md",
-    "docs/zellij-backend.md",
-    "docs/orca-backend.md",
-    "docs/cmux-backend.md",
     "docs/remote-secondmates.md"
   ],
   "requiredOwnerPointers": [
@@ -87,22 +84,6 @@
       "target": "docs/verification/runtime-backends.md"
     },
     {
-      "source": "docs/zellij-backend.md",
-      "target": "docs/verification/runtime-backends.md"
-    },
-    {
-      "source": "docs/orca-backend.md",
-      "target": "docs/verification/runtime-backends.md"
-    },
-    {
-      "source": "docs/cmux-backend.md",
-      "target": "docs/verification/runtime-backends.md"
-    },
-    {
-      "source": "docs/codex-app-backend.md",
-      "target": "docs/verification/runtime-backends.md"
-    },
-    {
       "source": "docs/trace-context.md",
       "target": "docs/verification/trace-context.md"
     }
@@ -141,15 +122,7 @@
       "audience": "agent-runtime"
     },
     {
-      "path": ".agents/skills/firstmate-codexapp/SKILL.md",
-      "audience": "agent-runtime"
-    },
-    {
       "path": ".agents/skills/firstmate-coding-guidelines/SKILL.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/firstmate-orca/SKILL.md",
       "audience": "agent-runtime"
     },
     {
@@ -269,14 +242,6 @@
       "audience": "maintainer-architecture"
     },
     {
-      "path": "docs/cmux-backend.md",
-      "audience": "operator-current"
-    },
-    {
-      "path": "docs/codex-app-backend.md",
-      "audience": "operator-current"
-    },
-    {
       "path": "docs/configuration.md",
       "audience": "operator-current"
     },
@@ -347,10 +312,6 @@
     {
       "path": "docs/jev-guards.md",
       "audience": "maintainer-architecture"
-    },
-    {
-      "path": "docs/orca-backend.md",
-      "audience": "operator-current"
     },
     {
       "path": "docs/pi-supervision-branch.md",
@@ -462,10 +423,6 @@
     },
     {
       "path": "docs/wedge-alarm.md",
-      "audience": "operator-current"
-    },
-    {
-      "path": "docs/zellij-backend.md",
       "audience": "operator-current"
     },
     {

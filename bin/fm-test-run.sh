@@ -353,7 +353,6 @@ family_for_basename() {
       ;;
     fm-bearings-board-lavish-live-e2e.test.sh|\
     fm-claude-stop-autoarm-live-e2e.test.sh|\
-    fm-cmux-claude-composer-live-e2e.test.sh|\
     fm-composer-matrix-live-e2e.test.sh|\
     fm-composer-codex-idle-live-e2e.test.sh|\
     fm-codex-continuity-live-e2e.test.sh|fm-codex-hook-layer-live-e2e.test.sh|\
@@ -401,15 +400,6 @@ family_for_basename() {
     fm-fleet-snapshot-view.test.sh|fm-home-summary-refresh.test.sh)
       printf '%s\n' snapshot-bearings
       ;;
-    fm-backend-cmux.test.sh|fm-backend-cmux-smoke.test.sh)
-      printf '%s\n' cmux
-      ;;
-    fm-backend-zellij.test.sh|fm-backend-zellij-smoke.test.sh)
-      printf '%s\n' zellij
-      ;;
-    fm-backend-orca.test.sh)
-      printf '%s\n' orca
-      ;;
     fm-branch-supervision.test.sh|fm-busy-adapter-wiring.test.sh|\
     fm-busy-state.test.sh|fm-classify-corr-token.test.sh|\
     fm-claude-stop-autoarm.test.sh|\
@@ -437,7 +427,6 @@ expected_gate_skip_for_family() {
   case "$1" in
     real-herdr-gated) printf '%s\n' herdr ;;
     live-harness-optin) printf '%s\n' live-capability ;;
-    cmux|zellij|orca) printf '%s\n' optional-binary ;;
     snapshot-bearings) printf '%s\n' optional-binary ;;
     *) printf '%s\n' none ;;
   esac
@@ -455,9 +444,6 @@ backend-dispatch
 pr-forge
 afk
 snapshot-bearings
-cmux
-zellij
-orca
 standalone
 unclassified
 EOF
@@ -674,12 +660,7 @@ tests/fm-afk-contract.test.sh 11101
 tests/fm-afk-inject-e2e.test.sh 41958
 tests/fm-afk-return.test.sh 47380
 tests/fm-ask-user-authority.test.sh 171
-tests/fm-backend-cmux-smoke.test.sh 34
-tests/fm-backend-cmux.test.sh 3754
-tests/fm-backend-orca.test.sh 27102
 tests/fm-backend-tmux-smoke.test.sh 291
-tests/fm-backend-zellij-smoke.test.sh 23
-tests/fm-backend-zellij.test.sh 10453
 tests/fm-backend.test.sh 23932
 tests/fm-backlog-atomicity.test.sh 219379
 tests/fm-backlog-handoff.test.sh 57458
@@ -703,7 +684,6 @@ tests/fm-classify-decision-key.test.sh 4362
 tests/fm-claude-stop-autoarm-live-e2e.test.sh 73
 tests/fm-claude-stop-autoarm.test.sh 61189
 tests/fm-claude-trust.test.sh 12010
-tests/fm-cmux-claude-composer-live-e2e.test.sh 77
 tests/fm-codex-continuity-live-e2e.test.sh 108
 tests/fm-codex-hook-layer-live-e2e.test.sh 108
 tests/fm-composer-codex-idle-live-e2e.test.sh 77
@@ -798,7 +778,6 @@ tests/fm-shared-captain-inheritance.test.sh 7991
 tests/fm-spawn-compact-adviser-disable-remote.test.sh 38561
 tests/fm-spawn-compact-adviser-disable.test.sh 21654
 tests/fm-spawn-dispatch-profile.test.sh 197548
-tests/fm-spawn-orca-worktree.test.sh 2400
 tests/fm-spawn-pool-base-freshen.test.sh 68652
 tests/fm-spawn-worktree-settle.test.sh 9309
 tests/fm-startup-memory-budget.test.sh 8086
@@ -1401,19 +1380,10 @@ families_for_changed_path() {
       printf '%s\n' real-herdr-gated
       printf '%s\n' backend-dispatch
       ;;
-    bin/backends/zellij*|tests/zellij-test-safety.sh)
-      printf '%s\n' zellij
+    bin/backends/tmux.sh)
       printf '%s\n' backend-dispatch
       ;;
-    bin/backends/cmux*|tests/cmux-test-safety.sh)
-      printf '%s\n' cmux
-      printf '%s\n' backend-dispatch
-      ;;
-    bin/backends/orca*|bin/backends/tmux.sh)
-      printf '%s\n' backend-dispatch
-      printf '%s\n' orca
-      ;;
-    bin/fm-backend.sh|bin/fm-backend-hometag-lib.sh)
+    bin/fm-backend.sh)
       printf '%s\n' backend-dispatch
       printf '%s\n' real-herdr-gated
       ;;

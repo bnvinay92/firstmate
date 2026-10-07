@@ -556,74 +556,6 @@ test_batch_reports_a_deferred_pair() {
   pass "a batch reports a capacity deferral as deferred, not failed"
 }
 
-# Orca owns its own worktrees and never takes the Treehouse allocation lock, so
-# a declared capacity is what makes an Orca spawn take the shared project lock,
-# even from an uncapped clone of a capped origin whose worker would still hold a
-# place: it refuses while another holder has it, and defers at capacity before
-# asking Orca for anything but its runtime status.
-test_orca_spawn_is_admitted_under_the_shared_project_lock() {
-  local case_dir home out out2 rc=0 rc2 holder i
-  command -v node >/dev/null 2>&1 || {
-    printf 'ok - skipped the Orca capacity case (node, which the Orca status check needs, is not installed)\n'
-    return 0
-  }
-  case_dir=$(make_case orca task-o)
-  home="$case_dir/home"
-  cat > "$case_dir/fakebin/orca" <<'SH'
-#!/usr/bin/env bash
-if [ "${1:-}" = status ]; then
-  printf '{"ok":true,"result":{"runtime":{"reachable":true,"state":"ready"}}}\n'
-  exit 0
-fi
-printf 'orca %s\n' "$*" >> "$FM_FAKE_CALL_LOG"
-exit 1
-SH
-  chmod +x "$case_dir/fakebin/orca"
-  git clone -q "$(git -C "$case_dir/project" remote get-url origin)" "$case_dir/project-2"
-  declare_capacity "$home" "project 1"
-
-  # shellcheck disable=SC2016 # expanded by the holder's own shell
-  FM_HOME="$home" FM_STATE_OVERRIDE='' bash -c '
-    . "$1/bin/fm-wake-lib.sh"
-    lock=$(fm_treehouse_project_lock_path "$2") || exit 1
-    fm_lock_try_acquire "$lock" || exit 1
-    : > "$3.held"
-    while [ ! -f "$3.release" ]; do sleep 0.05; done
-    fm_lock_release "$lock"
-  ' _ "$ROOT" "$case_dir/project" "$case_dir/holder" &
-  holder=$!
-  i=0
-  while [ ! -f "$case_dir/holder.held" ]; do
-    i=$((i + 1))
-    [ "$i" -lt 200 ] || fail "the lock holder never took the project lock"
-    sleep 0.05
-  done
-  out=$(run_spawn "$case_dir" "$home" "$case_dir/unused" task-o "$case_dir/project" \
-    --backend orca --mode no-mistakes --yolo off) || rc=$?
-  rc2=0
-  out2=$(run_spawn "$case_dir" "$home" "$case_dir/unused" task-o "$case_dir/project-2" \
-    --backend orca --mode no-mistakes --yolo off) || rc2=$?
-  : > "$case_dir/holder.release"
-  wait "$holder" || true
-  expect_code 1 "$rc" "an Orca spawn ignored a held project lock: $out"
-  assert_contains "$out" "another spawn or cleanup holds the shared project lock for $case_dir/project; refusing to race its capacity admission" \
-    "the Orca spawn did not refuse on the shared project lock"
-  expect_code 1 "$rc2" "an Orca spawn from an uncapped same-origin clone ignored the held project lock: $out2"
-  assert_contains "$out2" "another spawn or cleanup holds the shared project lock for $case_dir/project-2" \
-    "the uncapped same-origin clone's Orca spawn did not refuse on the shared project lock"
-  assert_absent "$home/state/task-o.meta" "the uncapped clone's Orca spawn published a record while the lock was held"
-  assert_no_grep "orca " "$case_dir/calls.log" "the Orca spawn asked Orca for more than its runtime status"
-
-  write_live "$home" live-a "$case_dir/project"
-  rc=0
-  out=$(run_spawn "$case_dir" "$home" "$case_dir/unused" task-o "$case_dir/project" \
-    --backend orca --mode no-mistakes --yolo off) || rc=$?
-  expect_code "$DEFER_EXIT" "$rc" "an Orca spawn beyond capacity was not deferred: $out"
-  assert_absent "$home/state/task-o.meta" "the deferred Orca spawn published a record"
-  assert_no_grep "orca " "$case_dir/calls.log" "the deferred Orca spawn created an Orca worktree"
-  pass "an Orca spawn takes the shared project lock whenever a same-origin clone is capped and defers before creating anything"
-}
-
 test_undeclared_capacity_keeps_dispatch_uncapped
 test_available_capacity_admits_the_worker
 test_exhausted_capacity_defers_without_leaving_anything_behind
@@ -639,4 +571,3 @@ test_concurrent_spawns_cannot_both_take_the_last_place
 test_failed_spawn_after_admission_holds_no_place
 test_unreadable_declaration_refuses_every_spawn
 test_batch_reports_a_deferred_pair
-test_orca_spawn_is_admitted_under_the_shared_project_lock
