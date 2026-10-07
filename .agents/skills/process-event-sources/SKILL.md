@@ -91,7 +91,7 @@ Use the owner-matched retirement command registration prints, so an older packag
 Two rules the commands cannot enforce for you:
 
 - **Never run the source's blocking command yourself in a conversational turn.** That is the problem the runner exists to remove, and for a destructive source it also consumes the result where nothing durable can capture it.
-- **A source is a wait on an external process, not a task.** It gets no task metadata and no backlog entry. If the wait itself needs tracking, file it as its own work item.
+- **A source is a wait on an external process, not a task.** It gets no task metadata and no backlog entry. If the wait itself needs tracking, file it as its own task.
 
 ## Handling a wake
 

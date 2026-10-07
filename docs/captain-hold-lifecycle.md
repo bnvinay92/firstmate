@@ -75,7 +75,7 @@ The `answer` subcommand records the captain's exact words and resolves the call 
 | Form | Effect |
 | --- | --- |
 | `answer` | Closes a question-shaped call. |
-| `answer --release` | Frees a captain-gated work item to proceed without completing it. |
+| `answer --release` | Frees a captain-gated task to proceed without completing it. |
 
 It requires a non-empty captain decision file of at most 8192 bytes.
 It then works in this order:
@@ -131,7 +131,7 @@ The `--force` path remains the explicit captain-approved discard escape hatch.
 
 ## Cleanup never closes a captain call
 
-The policy prefers holding the very work item a question gates.
+The policy prefers holding the very task a question gates.
 So the backlog row a finished task's cleanup is about to close is routinely the captain's own call.
 
 `bin/fm-teardown.sh` therefore asks the read-only `open` subcommand before its automatic close:
@@ -445,7 +445,7 @@ Three states are deliberately not divergence:
 - A `captain-held [key=...]` close is the verified transfer `complete` writes, so the structured row staying open behind it is correct.
   `bin/fm-classify-lib.sh`'s `status_key_closing_verb` is what keeps the two closing verbs distinguishable.
 - A still-open keyed status decision belongs to the OPEN DECISIONS fold.
-- The absence of a routed work item is legitimate rather than incomplete.
+- The absence of a routed task is legitimate rather than incomplete.
   When the decision is the deliverable, there is nothing to route, so routed work is no part of the test.
 
 ### Cost and scope
@@ -518,7 +518,7 @@ The suite does not test the accepted merge-to-cleanup re-hold window or asynchro
   A status resolution over a still-open captain-held task reaches both `diverged` and the drain's `RECORD DIVERGENCE` section, under the collapsed and the legacy identity alike.
   The backlog task, its hold, and the status log all survive the report unchanged, and the printed hint names both reconciliation directions.
 - The false-signal boundary holds.
-  A captain call with no routed work item, a verified `captain-held` transfer, a still-open status decision, an already answered call, and an ordinary task whose keyed question was answered all stay silent.
+  A captain call with no routed task, a verified `captain-held` transfer, a still-open status decision, an already answered call, and an ordinary task whose keyed question was answered all stay silent.
 
 ### Completion and verification
 

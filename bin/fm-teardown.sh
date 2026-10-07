@@ -30,7 +30,7 @@
 # The close - and only the close - is replaced by `tasks-axi reopen` with the
 # deliverable recorded while the backlog item is still an open captain call
 # (bin/fm-captain-hold.sh `open` owns that predicate), because the policy holds
-# the very work item a question gates and cleanup must never retire the
+# the very task a question gates and cleanup must never retire the
 # captain's own question.
 # NOTE: this uses `open`'s silent default and depends only on its unchanged
 # 0/1/2 exit-code contract. The optional `--identity` output that bin/fm-watch.sh
