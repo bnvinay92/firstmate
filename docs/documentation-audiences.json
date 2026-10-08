@@ -28,9 +28,6 @@
     "docs/wedge-alarm.md",
     "docs/tmux-backend.md",
     "docs/herdr-backend.md",
-    "docs/zellij-backend.md",
-    "docs/orca-backend.md",
-    "docs/cmux-backend.md",
     "docs/remote-secondmates.md"
   ],
   "requiredOwnerPointers": [
@@ -87,22 +84,6 @@
       "target": "docs/verification/runtime-backends.md"
     },
     {
-      "source": "docs/zellij-backend.md",
-      "target": "docs/verification/runtime-backends.md"
-    },
-    {
-      "source": "docs/orca-backend.md",
-      "target": "docs/verification/runtime-backends.md"
-    },
-    {
-      "source": "docs/cmux-backend.md",
-      "target": "docs/verification/runtime-backends.md"
-    },
-    {
-      "source": "docs/codex-app-backend.md",
-      "target": "docs/verification/runtime-backends.md"
-    },
-    {
       "source": "docs/trace-context.md",
       "target": "docs/verification/trace-context.md"
     }
@@ -141,19 +122,7 @@
       "audience": "agent-runtime"
     },
     {
-      "path": ".agents/skills/firstmate-codexapp/SKILL.md",
-      "audience": "agent-runtime"
-    },
-    {
       "path": ".agents/skills/firstmate-coding-guidelines/SKILL.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/firstmate-orca/SKILL.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/fmx-respond/SKILL.md",
       "audience": "agent-runtime"
     },
     {
@@ -177,10 +146,6 @@
       "audience": "agent-runtime"
     },
     {
-      "path": ".agents/skills/harness-adapters/references/harness/agy.md",
-      "audience": "agent-runtime"
-    },
-    {
       "path": ".agents/skills/harness-adapters/references/harness/claude.md",
       "audience": "agent-runtime"
     },
@@ -189,43 +154,7 @@
       "audience": "agent-runtime"
     },
     {
-      "path": ".agents/skills/harness-adapters/references/harness/cursor.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/harness-adapters/references/harness/devin.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/harness-adapters/references/harness/gemini.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/harness-adapters/references/harness/grok.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/harness-adapters/references/harness/kimi.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/harness-adapters/references/harness/muse.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/harness-adapters/references/harness/omp.md",
-      "audience": "agent-runtime"
-    },
-    {
       "path": ".agents/skills/harness-adapters/references/harness/opencode.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/harness-adapters/references/harness/pi.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/harness-adapters/references/harness/rovo.md",
       "audience": "agent-runtime"
     },
     {
@@ -277,10 +206,6 @@
       "audience": "maintainer-architecture"
     },
     {
-      "path": "GROK_BOT.md",
-      "audience": "public-product"
-    },
-    {
       "path": "README.md",
       "audience": "public-product"
     },
@@ -313,14 +238,6 @@
       "audience": "maintainer-architecture"
     },
     {
-      "path": "docs/cmux-backend.md",
-      "audience": "operator-current"
-    },
-    {
-      "path": "docs/codex-app-backend.md",
-      "audience": "operator-current"
-    },
-    {
       "path": "docs/configuration.md",
       "audience": "operator-current"
     },
@@ -337,19 +254,7 @@
       "audience": "maintainer-architecture"
     },
     {
-      "path": "docs/extension-bindings.md",
-      "audience": "maintainer-architecture"
-    },
-    {
       "path": "docs/examples/crew-dispatch.json",
-      "audience": "operator-example"
-    },
-    {
-      "path": "docs/examples/process-event-extension/file-signal.mjs",
-      "audience": "operator-example"
-    },
-    {
-      "path": "docs/examples/process-event-extension/firstmate-extension.json",
       "audience": "operator-example"
     },
     {
@@ -393,10 +298,6 @@
       "audience": "maintainer-architecture"
     },
     {
-      "path": "docs/orca-backend.md",
-      "audience": "operator-current"
-    },
-    {
       "path": "docs/pi-supervision-branch.md",
       "audience": "maintainer-architecture"
     },
@@ -429,23 +330,7 @@
       "audience": "agent-runtime"
     },
     {
-      "path": "docs/supervision-protocols/cursor.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": "docs/supervision-protocols/grok.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": "docs/supervision-protocols/omp.md",
-      "audience": "agent-runtime"
-    },
-    {
       "path": "docs/supervision-protocols/opencode.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": "docs/supervision-protocols/pi.md",
       "audience": "agent-runtime"
     },
     {
@@ -473,14 +358,6 @@
       "audience": "operator-current"
     },
     {
-      "path": "docs/verification/agy.md",
-      "audience": "maintainer-verification"
-    },
-    {
-      "path": "docs/verification/devin.md",
-      "audience": "maintainer-verification"
-    },
-    {
       "path": "docs/verification/dispatch-auth.md",
       "audience": "maintainer-verification"
     },
@@ -493,19 +370,7 @@
       "audience": "maintainer-verification"
     },
     {
-      "path": "docs/verification/muse.md",
-      "audience": "maintainer-verification"
-    },
-    {
       "path": "docs/verification/process-event-sources.md",
-      "audience": "maintainer-verification"
-    },
-    {
-      "path": "docs/verification/public-followup.md",
-      "audience": "maintainer-verification"
-    },
-    {
-      "path": "docs/verification/rovo.md",
       "audience": "maintainer-verification"
     },
     {
@@ -529,19 +394,11 @@
       "audience": "maintainer-verification"
     },
     {
-      "path": "docs/voice-relay.md",
-      "audience": "operator-current"
-    },
-    {
       "path": "docs/watcher-continuity.md",
       "audience": "operator-current"
     },
     {
       "path": "docs/wedge-alarm.md",
-      "audience": "operator-current"
-    },
-    {
-      "path": "docs/zellij-backend.md",
       "audience": "operator-current"
     },
     {

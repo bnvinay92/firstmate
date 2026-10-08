@@ -32,7 +32,6 @@ CONTROL="$ROOT/bin/fm-control.sh"
 SPAWN="$ROOT/bin/fm-spawn.sh"
 PROMOTE="$ROOT/bin/fm-promote.sh"
 BRIEF="$ROOT/bin/fm-brief.sh"
-X_LINK="$ROOT/bin/fm-x-link.sh"
 # fm_test_tmproot's own cleanup trap fires when its command substitution exits,
 # so recreate the root before resolving it and clean it up from this file's trap.
 TMP_ROOT=$(fm_test_tmproot fm-control-relaunch)
@@ -48,6 +47,40 @@ relaunch_cleanup() {
   rm -rf "$TMP_ROOT"
 }
 trap relaunch_cleanup EXIT
+
+# A stand-in durable metadata writer for the concurrency cases below: it
+# rewrites two probe lines in a task record under that record's lock and
+# publishes through the same atomic transition the production writers use.
+META_WRITER="$TMP_ROOT/meta-writer.sh"
+cat > "$META_WRITER" <<'SH'
+#!/usr/bin/env bash
+set -u
+FM_HOME=${FM_HOME:?}
+ROOT=${FM_ROOT_OVERRIDE:?}
+STATE="$FM_HOME/state"
+ID=$1
+VALUE=$2
+COUNT=$3
+# shellcheck source=/dev/null
+. "$ROOT/bin/fm-tasks-axi-lib.sh"
+# shellcheck source=/dev/null
+. "$ROOT/bin/fm-backlog-transition-lib.sh"
+# shellcheck source=/dev/null
+. "$ROOT/bin/fm-wake-lib.sh"
+meta="$STATE/$ID.meta"
+lock=$(fm_meta_lock_path "$meta") || exit 1
+fm_lock_acquire_wait "$lock" || exit 1
+tmp=$(mktemp "$STATE/.$ID.meta.probe.XXXXXX") || { fm_lock_release "$lock"; exit 1; }
+{ grep -vE '^probe_link=|^probe_count=' "$meta" || true; } > "$tmp"
+printf 'probe_link=%s\nprobe_count=%s\n' "$VALUE" "$COUNT" >> "$tmp"
+if ! fm_backlog_atomic_transition publish "$tmp" "$meta" "task record" "$STATE"; then
+  rm -f "$tmp"
+  fm_lock_release "$lock"
+  exit 1
+fi
+fm_lock_release "$lock"
+SH
+chmod +x "$META_WRITER"
 
 # The same lifecycle-modelling tmux stub as tests/fm-control.test.sh: the
 # harness's exit command stops the agent, and a launch-brief literal starts the
@@ -308,7 +341,7 @@ for path in "$@"; do
 done
 if [ -n "${FM_FAKE_META_WRITER_TARGET:-}" ] \
    && [ "$target_path" = "$FM_FAKE_META_WRITER_TARGET" ] \
-   && grep -q '^x_request=' "$source_path" 2>/dev/null; then
+   && grep -q '^probe_link=' "$source_path" 2>/dev/null; then
   : > "$FM_FAKE_META_WRITER_READY"
   while [ ! -e "$FM_FAKE_META_WRITER_RELEASE" ]; do /bin/sleep 0.01; done
 fi
@@ -473,7 +506,7 @@ test_relaunch_preserves_durable_task_metadata() {
   {
     printf '%s\n' 'pr=https://github.com/example/repo/pull/19'
     printf '%s\n' 'pr_head=feature/relaunch'
-    printf '%s\n' 'x_request=request-19'
+    printf '%s\n' 'probe_link=request-19'
     printf '%s\n' 'decisions_reviewed=1'
   } >> "$dir/home/state/rl19.meta"
 
@@ -483,8 +516,8 @@ test_relaunch_preserves_durable_task_metadata() {
     || fail "the task PR must survive relaunch"
   [ "$(meta_field "$dir" rl19 pr_head)" = "feature/relaunch" ] \
     || fail "the task PR head must survive relaunch"
-  [ "$(meta_field "$dir" rl19 x_request)" = "request-19" ] \
-    || fail "the task X request must survive relaunch"
+  [ "$(meta_field "$dir" rl19 probe_link)" = "request-19" ] \
+    || fail "an unrelated durable task field must survive relaunch"
   [ "$(meta_field "$dir" rl19 decisions_reviewed)" = 1 ] \
     || fail "the task decision state must survive relaunch"
   pass "fm-control relaunch: durable task metadata survives replacement launch publication"
@@ -522,8 +555,7 @@ test_relaunch_serializes_concurrent_durable_metadata_publication() {
     FM_FAKE_META_WRITER_TARGET="$dir/home/state/rl28.meta" \
     FM_FAKE_META_WRITER_READY="$ready" \
     FM_FAKE_META_WRITER_RELEASE="$release" \
-    "$X_LINK" rl28 request-28 --carry-count 1 --carry-ts 1700000000 \
-      --carry-platform x --carry-max 280 > "$dir/link.out" 2>&1 &
+    "$META_WRITER" rl28 request-28 1 > "$dir/link.out" 2>&1 &
   link_pid=$!
   i=0
   while [ ! -e "$waiting" ] && [ "$i" -lt 500 ]; do
@@ -551,13 +583,13 @@ test_relaunch_serializes_concurrent_durable_metadata_publication() {
   }
   : > "$release"
   wait "$link_pid"; rc=$?
-  expect_code 0 "$rc" "concurrent X metadata publication should serialize"$'\n'"$(cat "$dir/link.out")"
+  expect_code 0 "$rc" "concurrent metadata publication should serialize"$'\n'"$(cat "$dir/link.out")"
   wait "$control_pid"; rc=$?
   expect_code 0 "$rc" "relaunch should complete before serialized metadata publication"$'\n'"$(cat "$dir/control.out")"
-  [ "$(meta_field "$dir" rl28 x_request)" = request-28 ] \
-    || fail "relaunch erased metadata published concurrently through the X interface"
-  [ "$(meta_field "$dir" rl28 x_followups)" = 1 ] \
-    || fail "relaunch erased the concurrent follow-up count"
+  [ "$(meta_field "$dir" rl28 probe_link)" = request-28 ] \
+    || fail "relaunch erased metadata published concurrently under the task-record lock"
+  [ "$(meta_field "$dir" rl28 probe_count)" = 1 ] \
+    || fail "relaunch erased the concurrent probe count"
   traceparent=$(meta_field "$dir" rl28 traceparent)
   fm_trace_context_valid "$traceparent" \
     || fail "concurrent metadata publication erased the replacement's trace carrier"
@@ -1377,15 +1409,14 @@ test_prepublication_failure_keeps_concurrent_durable_metadata() {
     fail "relaunch did not reach its pre-publication endpoint check"
   }
   link_out=$(env PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" \
-    "$X_LINK" rl30 request-30 --carry-count 2 --carry-ts 1700000000 \
-      --carry-platform x --carry-max 280 2>&1); rc=$?
+    "$META_WRITER" rl30 request-30 2 2>&1); rc=$?
   expect_code 0 "$rc" "concurrent durable metadata publication should succeed"$'\n'"$link_out"
   wait "$control_pid"; rc=$?
   expect_code 1 "$rc" "the staged pre-publication launch failure should fail closed"
-  [ "$(meta_field "$dir" rl30 x_request)" = request-30 ] \
-    || fail "rollback erased the concurrent X request"
-  [ "$(meta_field "$dir" rl30 x_followups)" = 2 ] \
-    || fail "rollback erased the concurrent follow-up count"
+  [ "$(meta_field "$dir" rl30 probe_link)" = request-30 ] \
+    || fail "rollback erased the concurrent probe link"
+  [ "$(meta_field "$dir" rl30 probe_count)" = 2 ] \
+    || fail "rollback erased the concurrent probe count"
   [ "$(journal_field "$dir" rl30 rollback)" = prior-record-kept ] \
     || fail "pre-publication rollback should leave the live record untouched"
   pass "fm-control relaunch: unpublished rollback keeps concurrent durable metadata"
@@ -2167,35 +2198,6 @@ herdr_case_or_skip() {  # <name> <id> [session] [surviving-pane]
   return 0
 }
 
-test_herdr_relaunch_resumes_only_the_registered_pi_session() {
-  local dir out rc=0 command registered
-  for registered in pi claude; do
-    herdr_case_or_skip "resume-$registered" "resume-$registered" || {
-      echo "skip - herdr relaunch needs jq (the herdr adapter parses JSON with it)"
-      return 0
-    }
-    dir=$HERDR_CASE_DIR
-    rm -f "$dir/fake/herdr-stopped"
-    sed -i 's/^harness=claude$/harness=pi/' "$dir/home/state/resume-$registered.meta"
-    # Keep the pane's status authority registered to an existing Pi session,
-    # while process-info proves that its previous agent has exited.
-    printf '{"result":{"agent":{"agent":"%s","agent_status":"idle","agent_session":{"kind":"path","value":"/tmp/pi-bound-session.jsonl"}}}}\n' \
-      "$registered" > "$dir/fake/herdr-agent-registration"
-    out=$(run_spawn "$dir" "resume-$registered" --relaunch --harness pi) || rc=$?
-    expect_code 0 "$rc" "Herdr Pi relaunch should complete ($registered registration)"$'\n'"$out"
-    command=$(cat "$dir/fake/launched-command")
-    if [ "$registered" = pi ]; then
-      assert_contains "$command" "--session '/tmp/pi-bound-session.jsonl'" \
-        "the replacement Pi must resume the session that owns Herdr status authority"
-    else
-      assert_not_contains "$command" "--session" \
-        "a Pi replacement must not resume a foreign adapter's conversation"
-    fi
-    rc=0
-  done
-  pass "fm-spawn --relaunch: resumes the bound Pi session only for a Pi registration"
-}
-
 test_herdr_reclaim_adopts_a_pane_that_outlived_its_server() {
   local dir out rc=0 log stray
   herdr_case_or_skip gone-herdr rl68 || {
@@ -2552,7 +2554,6 @@ test_tmux_refuses_a_window_missing_from_its_session
 test_tmux_refuses_a_session_that_cannot_be_found
 test_tmux_refuses_when_the_server_is_gone
 test_reclaim_refuses_an_unreadable_endpoint
-test_herdr_relaunch_resumes_only_the_registered_pi_session
 test_herdr_reclaim_adopts_a_pane_that_outlived_its_server
 test_herdr_exit_reports_already_stopped_when_the_pane_outlived_its_server
 test_herdr_rebind_stays_in_the_recorded_session

@@ -6,8 +6,8 @@
 #   fm-dispatch-resolve.sh <brief-file> [--project <name>]
 #
 # Opt-in gate: TYPESAFE_API_KEY non-empty in this process environment, else a
-#   TYPESAFE_API_KEY= line in $FM_HOME/.env read with fmx_env_get, the same
-#   accessor as FMX_PAIRING_TOKEN (bin/fm-env-lib.sh). The environment wins.
+#   TYPESAFE_API_KEY= line in $FM_HOME/.env read with fmx_env_get
+#   (bin/fm-env-lib.sh). The environment wins.
 #   Absent in both: one "dispatch-resolve: off" line on stderr, nothing on
 #   stdout, exit 0, no network call, so firstmate dispatches exactly as today.
 #   The key lives in one shell variable and reaches curl as a header read from

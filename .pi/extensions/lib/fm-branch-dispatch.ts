@@ -175,8 +175,8 @@ const UNSAFE_SCOPE: UnreadWakeScope = {
 // itself - it only consumes the exact sequence-number snapshot this function
 // (via writeEligibleRowsSnapshot) hands it.
 //
-// A check-kind row - merge-confirmation polls, Relay mentions, credential/auth
-// failures, and every other legitimately main-only class - never vetoes a scan
+// A check-kind row - merge-confirmation polls, credential/auth failures, and
+// every other legitimately main-only class - never vetoes a scan
 // in either mode. It is simply excluded from eligibleSeqs and left queued for
 // main, which is woken for it on that check's own watcher cycle
 // (fm-primary-pi-watch.ts forces every check-kind TRIGGER to main), so nothing
@@ -584,8 +584,8 @@ export interface BranchOfferVerdict {
 // host off Pi (bin/fm-branch-dispatch.mjs offer) both route through this one
 // owner, so a close reaches main off Pi exactly when it would on Pi.
 //
-// A check-kind close (merge-confirmation polls, Relay mentions,
-// credential/auth failures, and every other legitimately main-only class -
+// A check-kind close (merge-confirmation polls, credential/auth failures,
+// and every other legitimately main-only class -
 // docs/pi-supervision-branch.md) is never routed to the branch while attended,
 // even when other currently-unread rows are individually eligible: this
 // watcher cycle's own triggering event stays on main, exactly as before

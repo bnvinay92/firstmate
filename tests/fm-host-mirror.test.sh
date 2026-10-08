@@ -50,7 +50,6 @@ as_session() {  # <home> <script>
 
 # The command string one tracked registration runs.
 claude_cmd() { jq -r --arg e "$1" '.hooks[$e][].hooks[] | select(.command | contains("fm-host-mirror.sh")) | .command' "$ROOT/.claude/settings.json"; }
-cursor_cmd() { jq -r --arg e "$1" '.hooks[$e][] | select(.command | contains("fm-host-mirror.sh")) | .command' "$ROOT/.cursor/hooks.json"; }
 
 # Inside an as_session script: one Claude prompt-submit (captain) or Stop
 # (main) hook payload carrying <text>, through the mirror's hook writer.
@@ -73,21 +72,16 @@ test_every_harness_registration_writes_the_mirror() {
   local home out
   home=$(make_home harnesses)
   CLAUDE_PROMPT=$(claude_cmd UserPromptSubmit) CLAUDE_STOP=$(claude_cmd Stop) \
-  CURSOR_PROMPT=$(cursor_cmd beforeSubmitPrompt) CURSOR_RESPONSE=$(cursor_cmd afterAgentResponse) \
   as_session "$home" '
     run() { printf "%s" "$2" | env CLAUDE_PROJECT_DIR="$PRIMARY_ROOT" CURSOR_PROJECT_DIR="$PRIMARY_ROOT" \
       bash -c "cd \"$PRIMARY_ROOT\" && $1"; }
     run "$CLAUDE_PROMPT" "{\"hook_event_name\":\"UserPromptSubmit\",\"prompt_id\":\"c1\",\"prompt\":\"claude captain\"}"
     run "$CLAUDE_STOP" "{\"hook_event_name\":\"Stop\",\"prompt_id\":\"c1\",\"last_assistant_message\":\"claude main\"}"
-    run "$CURSOR_PROMPT" "{\"hook_event_name\":\"beforeSubmitPrompt\",\"generation_id\":\"u1\",\"prompt\":\"cursor captain\",\"cursor_version\":\"x\"}"
-    run "$CURSOR_RESPONSE" "{\"hook_event_name\":\"afterAgentResponse\",\"generation_id\":\"u1\",\"text\":\"cursor main\",\"cursor_version\":\"x\"}"
   ' || fail "a tracked mirror hook failed"
   out=$(entries "$home")
   assert_equals "captain|claude captain
-main|claude main
-captain|cursor captain
-main|cursor main" "$out" "every tracked registration must write its captain prompt and main reply, in order"
-  pass "mirror: the Claude and Cursor registrations each write the captain's prompt and main's reply"
+main|claude main" "$out" "every tracked registration must write its captain prompt and main reply, in order"
+  pass "mirror: the Claude registrations write the captain's prompt and main's reply"
 }
 
 # Non-host invariance: on a home opted out by config/supervision-host-off, every
@@ -102,14 +96,11 @@ test_home_that_opted_out_is_untouched() {
   snapshot() { (cd "$1/state" && find . -type f ! -name .lock | LC_ALL=C sort | while IFS= read -r f; do printf '%s %s\n' "$f" "$(cksum < "$f")"; done); }
   before=$(snapshot "$home")
   CLAUDE_PROMPT=$(claude_cmd UserPromptSubmit) CLAUDE_STOP=$(claude_cmd Stop) \
-  CURSOR_PROMPT=$(cursor_cmd beforeSubmitPrompt) CURSOR_RESPONSE=$(cursor_cmd afterAgentResponse) \
   as_session "$home" '
     run() { printf "%s" "$2" | env CLAUDE_PROJECT_DIR="$PRIMARY_ROOT" CURSOR_PROJECT_DIR="$PRIMARY_ROOT" \
       bash -c "cd \"$PRIMARY_ROOT\" && $1"; }
     run "$CLAUDE_PROMPT" "{\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":\"hello\"}"
-    run "$CURSOR_PROMPT" "{\"hook_event_name\":\"beforeSubmitPrompt\",\"prompt\":\"hello\",\"cursor_version\":\"x\"}"
     run "$CLAUDE_STOP" "{\"hook_event_name\":\"Stop\",\"last_assistant_message\":\"hi\"}"
-    run "$CURSOR_RESPONSE" "{\"hook_event_name\":\"afterAgentResponse\",\"text\":\"hi\",\"cursor_version\":\"x\"}"
   ' > "$home/writers.out" 2>&1 || fail "a mirror registration failed on a home that opted out: $(cat "$home/writers.out")"
   [ ! -s "$home/writers.out" ] || fail "a mirror registration printed on a home that opted out: $(cat "$home/writers.out")"
   after=$(snapshot "$home")
@@ -118,25 +109,21 @@ test_home_that_opted_out_is_untouched() {
 }
 
 # Default-on for Claude: with no config/supervision-host, the Claude
-# registrations write the mirror, while Cursor's stay file-gated and write
-# nothing.
+# registrations write the mirror.
 test_home_without_the_file_mirrors_only_claude() {
   local home out
   home=$(make_home without-file 0)
   CLAUDE_PROMPT=$(claude_cmd UserPromptSubmit) CLAUDE_STOP=$(claude_cmd Stop) \
-  CURSOR_PROMPT=$(cursor_cmd beforeSubmitPrompt) CURSOR_RESPONSE=$(cursor_cmd afterAgentResponse) \
   as_session "$home" '
     run() { printf "%s" "$2" | env CLAUDE_PROJECT_DIR="$PRIMARY_ROOT" CURSOR_PROJECT_DIR="$PRIMARY_ROOT" \
       bash -c "cd \"$PRIMARY_ROOT\" && $1"; }
     run "$CLAUDE_PROMPT" "{\"hook_event_name\":\"UserPromptSubmit\",\"prompt_id\":\"c1\",\"prompt\":\"claude captain\"}"
     run "$CLAUDE_STOP" "{\"hook_event_name\":\"Stop\",\"prompt_id\":\"c1\",\"last_assistant_message\":\"claude main\"}"
-    run "$CURSOR_PROMPT" "{\"hook_event_name\":\"beforeSubmitPrompt\",\"generation_id\":\"u1\",\"prompt\":\"cursor captain\",\"cursor_version\":\"x\"}"
-    run "$CURSOR_RESPONSE" "{\"hook_event_name\":\"afterAgentResponse\",\"generation_id\":\"u1\",\"text\":\"cursor main\",\"cursor_version\":\"x\"}"
   ' || fail "a tracked mirror hook failed"
   out=$(entries "$home")
   assert_equals "captain|claude captain
 main|claude main" "$out" "only the Claude registrations may write the mirror on a home without the file"
-  pass "mirror: without config/supervision-host the Claude registrations write the mirror and Cursor's stay inert"
+  pass "mirror: without config/supervision-host the Claude registrations write the mirror"
 }
 
 test_writers_are_inert_on_a_home_that_opted_out() {

@@ -85,18 +85,7 @@ A new tool remains undispatchable until the `verify` plan, its harness entry, ev
   "harnesses": {
     "claude": "references/harness/claude.md",
     "codex": "references/harness/codex.md",
-    "opencode": "references/harness/opencode.md",
-    "pi": "references/harness/pi.md",
-    "pi-signed": "references/harness/pi.md",
-    "grok": "references/harness/grok.md",
-    "kimi": "references/harness/kimi.md",
-    "cursor": "references/harness/cursor.md",
-    "gemini": "references/harness/gemini.md",
-    "muse": "references/harness/muse.md",
-    "rovo": "references/harness/rovo.md",
-    "omp": "references/harness/omp.md",
-    "agy": "references/harness/agy.md",
-    "devin": "references/harness/devin.md"
+    "opencode": "references/harness/opencode.md"
   }
 }
 ```

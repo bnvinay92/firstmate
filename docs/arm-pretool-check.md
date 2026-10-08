@@ -99,14 +99,9 @@ Approved setup nodes are:
 
 - `cd <one path word>`.
 - `export NAME=<one shell word>` with no command substitution, process substitution, or redirection.
-- `source <x-mode path>` or `. <x-mode path>`.
-- `[ -f <x-mode path> ] && source <x-mode path>` and the equivalent dot form.
-
-The allowed x-mode paths are `config/x-mode.env`, `./config/x-mode.env`, and an absolute path that normalizes to `<active-firstmate-home>/config/x-mode.env`.
-An absolute x-mode path outside the active home is not an approved setup node.
 
 Approved nodes may be separated by `;`, a real newline, or `&&`.
-`&&` is accepted after setup so a failed `cd`, `export`, or source prevents the protected call from running under the wrong setup.
+`&&` is accepted after setup so a failed `cd` or `export` prevents the protected call from running under the wrong setup.
 
 The final protected node may have one immediate `exec` wrapper.
 Its arguments are ordinary shell words and may contain quoted semicolons or watcher names.
@@ -214,6 +209,7 @@ pi -p -e .pi/extensions/fm-primary-turnend-guard.ts --no-context-files --no-sess
 ```
 
 Observed output for the four allowed calls was `UNRELATED_EXECUTED`, a successful read-only `pgrep`, `CHECKPOINT_EXECUTED`, and two `TMUX_ARGS:` lines that preserved the watcher text as data.
+The third call's x-mode `source` setup node was later removed together with Relay, so that shape is no longer blessed and now denies with `watcher-bundled`.
 Each harness blocked the final command with exit 2 mapped through its native adapter behavior.
 The stable reason was `[watcher-background] a protected watcher command cannot run in an asynchronous shell list or through nohup/disown`.
 The dummy arm body would have created `<harness>.sentinel` if the denied command executed.

@@ -323,11 +323,6 @@ trap 'handle_autoarm_signal HUP' HUP
 trap 'handle_autoarm_signal TERM' TERM
 trap 'handle_autoarm_signal INT' INT
 
-# X mode cadence: source the generated config so an X instance polls at its
-# 30s cadence (fm-bootstrap.sh x_mode_setup contract).
-# shellcheck source=/dev/null
-[ -f "$CONFIG/x-mode.env" ] && . "$CONFIG/x-mode.env"
-
 # --- foreground the real arm wrapper ------------------------------------------
 # The arm is a tracked child this hook waits on, never a fire-and-forget shell
 # & whose child would be reaped when the hook returned: this hook process tree

@@ -240,7 +240,7 @@ Two channels feed that one intake today, and both are ordinary callers rather th
 It reads only rows tagged `choice` and relays a card's declared close mode.
 It can never let freeform captain prose forge a task id or a mode.
 
-Trusted external process-event adapters intentionally expose no answer operation and cannot feed this authority-bearing intake; [`extension-bindings.md`](extension-bindings.md#trust-boundary) owns that boundary.
+Trusted external process-event adapters intentionally expose no answer operation and cannot feed this authority-bearing intake; `extension-bindings.md` owns that boundary.
 
 ## Reconcile: re-check reality, never a blind close
 

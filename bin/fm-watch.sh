@@ -204,8 +204,6 @@ WATCH_HOME_EXISTED=0
 # watcher consumes only its identity-bound record after a poll observes landing.
 # shellcheck source=/dev/null
 . "$SCRIPT_DIR/fm-merge-authority-lib.sh"
-# shellcheck source=bin/fm-x-lib.sh
-. "$SCRIPT_DIR/fm-x-lib.sh"
 # shellcheck source=bin/fm-check-lib.sh
 . "$SCRIPT_DIR/fm-check-lib.sh"
 # Parent-owned secondmate missed-report guards: durable pending-reply
@@ -2795,46 +2793,35 @@ while :; do
     for c in "$STATE"/*.check.sh; do
       [ -e "$c" ] || continue
       is_pr_poll=0
-      if [ "$(basename "$c")" = x-watch.check.sh ]; then
-        if fmx_poll_shim_valid "$c" "$FM_HOME" "$FM_ROOT" \
-          && [ -f "$FM_ROOT/bin/fm-x-poll.sh" ] && [ ! -L "$FM_ROOT/bin/fm-x-poll.sh" ]; then
-          FM_HOME="$FM_HOME" run_check_capture "$FM_ROOT/bin/fm-x-poll.sh" || exit 1
-          out=$FM_CHECK_RESULT
-        else
-          rejected_checks="$rejected_checks $c"
+      id=$(basename "$c" .check.sh)
+      if fm_pr_poll_snapshot_capture "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" \
+        || { rerecord_device_shifted_pr_poll "$id" \
+          && fm_pr_poll_snapshot_capture "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh"; }; then
+        is_pr_poll=1
+        provider=$FM_PR_POLL_SNAPSHOT_PROVIDER
+        url=$FM_PR_POLL_SNAPSHOT_URL
+        host=$FM_PR_POLL_SNAPSHOT_HOST
+        path=$FM_PR_POLL_SNAPSHOT_PATH
+        number=$FM_PR_POLL_SNAPSHOT_NUMBER
+        PR_POLL_CONTROL_LOCK="$STATE/.control-$id.lock"
+        fm_lock_acquire_wait "$PR_POLL_CONTROL_LOCK" || exit 1
+        if ! fm_pr_poll_snapshot_matches "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh"; then
+          pr_poll_control_release || exit 1
+          triage_log "PR poll for $id changed before its validated check; skipping the stale snapshot"
           continue
         fi
+        run_check_capture "$SCRIPT_DIR/fm-pr-poll.sh" --validated \
+          "$provider" "$url" "$host" "$path" "$number" || exit 1
+        out=$FM_CHECK_RESULT
+      elif fm_custom_check_snapshot_prepare "$STATE" "$id"; then
+        custom_snapshot=$FM_CUSTOM_CHECK_SNAPSHOT
+        run_check_capture "$custom_snapshot" || exit 1
+        out=$FM_CHECK_RESULT
+        fm_custom_check_snapshot_cleanup
       else
-        id=$(basename "$c" .check.sh)
-        if fm_pr_poll_snapshot_capture "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" \
-          || { rerecord_device_shifted_pr_poll "$id" \
-            && fm_pr_poll_snapshot_capture "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh"; }; then
-          is_pr_poll=1
-          provider=$FM_PR_POLL_SNAPSHOT_PROVIDER
-          url=$FM_PR_POLL_SNAPSHOT_URL
-          host=$FM_PR_POLL_SNAPSHOT_HOST
-          path=$FM_PR_POLL_SNAPSHOT_PATH
-          number=$FM_PR_POLL_SNAPSHOT_NUMBER
-          PR_POLL_CONTROL_LOCK="$STATE/.control-$id.lock"
-          fm_lock_acquire_wait "$PR_POLL_CONTROL_LOCK" || exit 1
-          if ! fm_pr_poll_snapshot_matches "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh"; then
-            pr_poll_control_release || exit 1
-            triage_log "PR poll for $id changed before its validated check; skipping the stale snapshot"
-            continue
-          fi
-          run_check_capture "$SCRIPT_DIR/fm-pr-poll.sh" --validated \
-            "$provider" "$url" "$host" "$path" "$number" || exit 1
-          out=$FM_CHECK_RESULT
-        elif fm_custom_check_snapshot_prepare "$STATE" "$id"; then
-          custom_snapshot=$FM_CUSTOM_CHECK_SNAPSHOT
-          run_check_capture "$custom_snapshot" || exit 1
-          out=$FM_CHECK_RESULT
-          fm_custom_check_snapshot_cleanup
-        else
-          fm_custom_check_snapshot_cleanup
-          rejected_checks="$rejected_checks $c"
-          continue
-        fi
+        fm_custom_check_snapshot_cleanup
+        rejected_checks="$rejected_checks $c"
+        continue
       fi
       if [ -n "$out" ]; then
         if [ "$(basename "$c")" = contributions.check.sh ]; then
