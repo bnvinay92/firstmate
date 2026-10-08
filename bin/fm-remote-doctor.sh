@@ -9,7 +9,7 @@
 # PATH used by worker jobs while retaining authority to inspect and repair the
 # worker itself.
 #
-# A remote secondmate always runs on the Herdr backend in the dedicated
+# A remote second mate always runs on the Herdr backend in the dedicated
 # fm-remote session. Its account therefore needs the Firstmate-owned Aqua Herdr
 # agent plus the sibling dev.firstmate.remote-job worker that runs normal fm-on
 # commands through the Aqua or Linux job-worker path. On darwin, that Herdr
