@@ -13,6 +13,7 @@ import {
   SECONDMATE_MARKER,
   SECTION_LABELS,
   appliedSummary,
+  applyArgs,
   approvedReview,
   countItems,
   crossings,
@@ -167,8 +168,23 @@ async function clearIfAsked($: Engine, where: StowSite): Promise<void> {
   })
 }
 
+// Learn where this session runs and restore what the captain chose. Runs at
+// session start and again after a /clear, which resets the session's state
+// without raising session.start.
+async function settle($: Engine): Promise<StowSite | null> {
+  const where = await detectSite($)
+  await update($, site, () => where)
+  if (where?.role === 'primary') {
+    const auto = await $.store.get('auto')
+    await update($, isAuto, () => auto === true)
+    const kept = (await $.store.get('lastAuto')) as StowApplied | undefined
+    await update($, lastAuto, () => kept ?? null)
+  }
+  return where
+}
+
 async function tick($: Engine, threshold: number): Promise<void> {
-  const where = await read($, site)
+  const where = (await read($, site)) ?? (await settle($))
   if (where === null) return
   const { context } = await $.session.usage()
   await publish($, where, threshold, context.tokens, context.window)
@@ -176,8 +192,10 @@ async function tick($: Engine, threshold: number): Promise<void> {
     const found = await refreshReadings($, where)
     const fired = ((await $.store.get('fired')) as string[] | undefined) ?? []
     const next = crossings(found, threshold, fired)
-    await $.store.set('fired', next.fired)
-    if ((await read($, isAuto)) && next.fire.length > 0) await startRound($, next.fire, true)
+    // A crossing counts as stowed only when Auto actually starts its round.
+    const starts = next.fire.length > 0 && (await read($, isAuto)) && (await read($, round)) === null
+    await $.store.set('fired', starts ? next.fired : next.fired.filter(home => !next.fire.includes(home)))
+    if (starts) await startRound($, next.fire, true)
     await followRound($, where)
   }
   await clearIfAsked($, where)
@@ -222,13 +240,14 @@ async function save($: Engine): Promise<void> {
   const loaded = await read($, review)
   if (where === null || loaded === null) return
   const approved = approvedReview(loaded, await read($, ticks), await read($, edits))
+  const asked = (await read($, round))?.homes ?? []
   await $.fs.write(`${where.home}/${APPROVED_FILE}`, JSON.stringify(approved, null, 2) + '\n')
   await update($, review, () => null)
   await update($, round, r => (r === null ? r : { ...r, isReviewOpen: false }))
   await $.ui.close({ id: PANE })
   $.clock.after(10, () => {
-    $.command.run({ command: 'stow', args: 'apply --mod' }).catch(() => {
-      $.ui.toast('The approved plan is saved, but the stow could not apply it; run /stow apply --mod.')
+    $.command.run({ command: 'stow', args: applyArgs(asked) }).catch(() => {
+      $.ui.toast(`The approved plan is saved, but the stow could not apply it; run /stow ${applyArgs(asked)}.`)
     })
   })
 }
@@ -244,20 +263,13 @@ export const register: Register = (on, options) => {
   const threshold = typeof options.thresholdTokens === 'number' ? options.thresholdTokens : 200_000
 
   on('session.start', async ($, e, next) => {
-    const where = await detectSite($)
-    await update($, site, () => where)
-    if (where !== null) {
-      if (where.role === 'primary') {
-        await $.command.register({ name: 'stow-review', description: 'Open the stow review pane' })
-        const auto = await $.store.get('auto')
-        await update($, isAuto, () => auto === true)
-        const kept = (await $.store.get('lastAuto')) as StowApplied | undefined
-        await update($, lastAuto, () => kept ?? null)
-      }
-      $.clock.every(TICK_MS, () => {
-        void tick($, threshold)
-      })
+    const where = await settle($)
+    if (where?.role === 'primary') {
+      await $.command.register({ name: 'stow-review', description: 'Open the stow review pane' })
     }
+    $.clock.every(TICK_MS, () => {
+      void tick($, threshold)
+    })
     return next(e)
   })
 

@@ -101,6 +101,12 @@ export function draftArgs(homes: readonly string[], isAuto: boolean): string {
   return `draft --mod${isAuto ? ' --auto' : ''} --homes ${homes.join(',')}`
 }
 
+// The command that applies the approved hand-off; the homes are the round's,
+// so the skill clears exactly the homes that were asked.
+export function applyArgs(homes: readonly string[]): string {
+  return `apply --mod --homes ${homes.join(',')}`
+}
+
 export function parseReview(text: string): StowReview | null {
   try {
     const raw = JSON.parse(text) as StowReview

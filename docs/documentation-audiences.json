@@ -390,6 +390,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/stow-review-mod.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/supervision.md",
       "audience": "maintainer-verification"
     },
@@ -403,6 +407,10 @@
     },
     {
       "path": "docs/wedge-alarm.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "mods/stow-review/README.md",
       "audience": "operator-current"
     },
     {

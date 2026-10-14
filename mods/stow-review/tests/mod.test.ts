@@ -177,7 +177,7 @@ describe('the review pane', () => {
     expect(approved.homes.map((plan: { home: string }) => plan.home)).toEqual(['main', 'mate-a'])
     expect(approved.homes[0].items).toHaveLength(1)
     expect(approved.homes[0].items[0].entry).toBe('- fact, reworded <!--a:2026-10-14-->')
-    expect(w.commands).toEqual(['stow draft --mod --homes main', 'stow apply --mod'])
+    expect(w.commands).toEqual(['stow draft --mod --homes main', 'stow apply --mod --homes main'])
   })
 
   test('cancel saves nothing', async ($, on) => {
