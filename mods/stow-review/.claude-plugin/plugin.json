@@ -1,0 +1,15 @@
+{
+  "name": "stow-review",
+  "version": "0.1.0",
+  "description": "Review and approve what Firstmate's /stow saves, from a band that appears when any Firstmate home's context passes a threshold.",
+  "author": { "name": "Firstmate contributors" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "thresholdTokens": {
+      "type": "number",
+      "title": "Stow threshold (tokens)",
+      "description": "Show the Stow band once a Firstmate home's context holds at least this many tokens.",
+      "default": 200000
+    }
+  }
+}

@@ -1,6 +1,6 @@
 ---
 name: stow
-description: Sweep the current session for uncaptured durable knowledge, file it to disk, persist the open work records this session knows are unfiled or now wrong, and curate the home's tiered, decaying startup memory before a context reset. Use when the captain invokes /stow (e.g. "/stow", "stow what you've learned"), before a session reset or context compaction, or periodically to keep operational memory current.
+description: Sweep the current session for uncaptured durable knowledge, persist the open work records this session knows are unfiled or now wrong, and curate the home's tiered, decaying startup memory before a context reset, drafting every write as a plan the captain approves before anything is saved. Use when the captain invokes /stow (e.g. "/stow", "stow what you've learned", or the stow-review mod's "/stow draft --mod" and "/stow apply --mod"), when a marked request asks this home to draft or apply a stow plan, before a session reset or context compaction, or periodically to keep operational memory current.
 user-invocable: true
 metadata:
   internal: true
@@ -13,6 +13,44 @@ metadata:
 Sweep this session for durable knowledge and open-work record state that exist only in conversation, then leave the next session with a compact current operating map rather than an accumulating journal.
 Memory entries are tiered and decay between passes, and stale material retires to a cold archive instead of being deleted.
 This skill writes only through the existing Firstmate ownership and write boundaries.
+Every write the pass decides on is drafted first and saved only after the captain approves it, under [Draft, review, and apply](#draft-review-and-apply).
+
+## Draft, review, and apply
+
+`bin/fm-stow-plan.sh` owns the plan format, the review and approval files, and the guarantee that apply writes only approved items in their approved wording; its header is the contract and this section is the procedure.
+Each rule below that says to write, archive, stamp, file, correct, or route something means: add that write to this home's plan as one item.
+An item's `entry` is the exact one-line text that would be written, so the captain reviews the real wording rather than a summary.
+Draft a dependent pair, such as a consolidation's rewrite and the removal it enables, as two items whose `why` names the other, and draft an offload as one `record` item so its relocation and removal are approved together.
+Nothing outside the plan is written before approval, except the reads, the budget reports, the plan file itself, and the marked requests this section sends.
+
+**Draft.**
+Run the required pass, the knowledge sweep, and open-record persistence below in draft mode, write `state/stow-plan.json`, and check it with `bin/fm-stow-plan.sh check`.
+In a primary home, then run the cascade below in draft mode and gather every plan into one review with `bin/fm-stow-plan.sh collect`.
+
+**Review.**
+How the captain reviews depends on how the round started:
+
+- `/stow` typed by hand: print `bin/fm-stow-plan.sh show` in chat, a numbered list grouped by home, stow section, and target, and wait for the captain's answer.
+  Turn the answer into `bin/fm-stow-plan.sh approve`: approve all, all but some numbers, or only some numbers, with each inline edit given as `--edit <n>=<text>`.
+  Never treat silence or an ambiguous answer as approval; ask one concise question instead.
+- `/stow draft --mod --homes <list>`: the stow-review Claude Code mod started the round for the homes in that list, the ones over its context threshold (`mods/stow-review/README.md`).
+  Draft this home's plan only when `main` is in the list, and otherwise write an empty plan, so a shared-preference item routed from a secondmate still has a home.
+  Send the draft request to each listed secondmate, wait for every correlated reply, then collect only the homes that replied with a plan (`--homes`).
+  End the turn with one line saying the plan is in the review pane; the mod opens it, and its Save writes the approved review and runs `/stow apply --mod --homes <list>`.
+- `/stow draft --mod --auto --homes <list>`: the captain turned the mod's Auto toggle on, which is standing approval to save everything the plans suggest without review.
+  Run the same round, then `bin/fm-stow-plan.sh approve --all` and continue straight to apply.
+  Auto never widens what a plan may contain, and every boundary in this skill still holds.
+
+In a secondmate home, the draft goes to the primary as the reply its request names, never to chat, and only the approved items that come back are applied.
+
+When no listed home drafted anything worth filing, there is nothing to review: end the round with `bin/fm-stow-plan.sh finish`, adding `--clear` when `main` was listed in a mod round.
+
+**Apply.**
+Run `bin/fm-stow-plan.sh split`, send each secondmate in the review its approved items with `bin/fm-stow-plan.sh request <id>`, apply a local direct-transport home's items there with `FM_HOME=<home> bin/fm-stow-plan.sh apply --approved <this home>/state/stow-approved/<id>.json`, and finish with this home's own `bin/fm-stow-plan.sh apply`.
+In a mod round, pass `--clear` to every request and apply for a home in the round's list, so the mod clears each asked home's session once its round has ended; never pass it in a hand-typed round.
+Apply this home's items last, because the mod clears the main session after this home's round ends.
+Then apply every `owner` line apply printed through that record's own owner, in the printed wording, and run the post-pass budget report and completion receipt below.
+An item apply skipped is reported, never retried by guessing; anything the captain did not approve is simply not written.
 
 ## Memory tiers and entry markers
 
@@ -75,7 +113,8 @@ While the flag is present:
 
 ## Required startup-memory pass
 
-Every `/stow` invocation performs this complete pass, even when the session contains no new finding:
+Every `/stow` invocation performs this complete pass, even when the session contains no new finding.
+Steps 1 and 2 read, steps 3 through 7 decide and draft, and step 8 runs after apply:
 
 1. Run `bin/fm-startup-memory-budget.sh report` before considering a write.
    Record its effective budget and each file's estimated-token total.
@@ -115,7 +154,7 @@ Every `/stow` invocation performs this complete pass, even when the session cont
    Convergence precondition: before evicting anything, total the eligible pool and check that archiving all of it would reach the budget; when even that cannot, skip the eviction rung entirely, archive nothing for budget reasons, and carry the concrete inability to the final step, naming the exempt pinned floor that crowds out the budget.
    Automatic processes never move a `pinned` entry: decay clocks, legacy grace cycles, oldest-first budget eviction, immediate budget archiving, and autonomous offload do not apply to it.
    The sole exception is relocation to a JIT owner after explicit, per-item captain approval under the offload flow below, and that entry remains in memory until its destination is live.
-8. Run `bin/fm-startup-memory-budget.sh report` again after the complete pass.
+8. Run `bin/fm-startup-memory-budget.sh report` again after apply.
    Finish at or below the effective budget, or open a concrete captain decision before ending the pass.
    A secondmate must explicitly report `primary-owned-shared-file-alone-exceeds-budget` when the inherited shared file alone exceeds its allowance, because local curation cannot resolve it.
    Route that constraint to the primary owner and open one concrete captain decision at the primary owning level that names the shortfall, with exactly these options: raise the affected home's effective budget, or explicitly approve the primary owner trimming or offloading each named shared-file entry.
@@ -219,7 +258,7 @@ A local skill exists only in this home, so offloading an entry out of `data/capt
    - Captain preferences and fleet-local operational facts belong in the destination selected by AGENTS.md after the required whole-file curation pass.
      Create `data/learnings.md` only for a genuinely new local learning with no stronger owner.
    - In a primary home, curate shared captain preferences only under the existing primary-authoritative shared-preference contract.
-     In a secondmate home, route a newly discovered shared preference to the main firstmate through marked status or a document pointer instead of editing the inherited file.
+     In a secondmate home, draft a newly discovered shared preference as a `data/captain-shared.md` item in this home's plan, which collect routes to the primary's review, instead of editing the inherited file.
    - Project-intrinsic knowledge never goes into a project's `AGENTS.md` through this fleet: a crewmate edits those files only to correct factually wrong information (AGENTS.md section 6), so no ship task carries an addition.
      Keep the candidate in `data/learnings.md` or surface it in the completion receipt so the captain can extend the file by hand.
    - Knowledge general to every Firstmate user belongs in this repo's shared tracked material through the normal branch, no-mistakes, PR, and captain-merge path.
@@ -271,22 +310,27 @@ State what reset-safe means in the same breath as the claim: nothing this sessio
 It is never a claim that the home's durable records are correct, because this pass checks no record the session did not name.
 Do not hide an over-budget result behind a reset-safe claim.
 In a primary home the receipt is written after the cascade below, not instead of it.
+Name each item apply wrote, each it skipped and why, and how many drafted items the captain left unapproved; an unapproved item is not an exception, but an over-budget result it leaves is reported like any other.
 
 ## Automatic cascade to secondmates
 
 In a primary home, every `/stow` cascades to every registered secondmate after this home's own required pass and knowledge sweep are complete.
 In a secondmate home, `/stow` curates that home only and never cascades further.
+A secondmate answers a draft request by drafting its plan with its own id as `home` and replying as the request says, and answers an apply request by running the `apply --from-request` command it names, applying any `owner` lines, and reporting one correlated line through `bin/fm-secondmate-report.sh`.
+A secondmate drafts a newly discovered shared captain preference as a `data/captain-shared.md` item in its own plan, which collect routes to the primary's review; it never writes that file itself.
 The cascade changes nothing until `/stow` is invoked: it adds no notification, no digest section, and no background work.
 
-Run `bin/fm-stow-cascade.sh` once the primary's own pass is done.
+Run `bin/fm-stow-cascade.sh` once the primary's own draft is done.
+In a mod round, act only on the secondmates the round lists; in a hand-typed round, on every registered secondmate.
 It enumerates each registered secondmate exactly once, reports that home's own budget accounting, and resolves how the sweep reaches it; its header owns the stanza fields, the bound, and the exit codes.
 Every home is judged against its own `config/startup-memory-budget` allowance, so never add homes together or treat one home's excess as another's.
 
 Act on each home by its reported `transport`:
 
-- `agent` - send the marked request with `bin/fm-send.sh fm-<id> "<request>"` so the live secondmate performs its own `/stow`, including the uncaptured knowledge that exists only in its session.
-  Ask it for the same completion receipt this skill defines, and read its reply from its status file or the document it points to, never from its chat.
-- `direct` - curate that local home's editable memory files yourself under the same retention plan, then re-run the cascade to confirm the after totals.
+- `agent` - send `bin/fm-stow-plan.sh draft-request` (with `--clear` in a mod round) as the marked request with `bin/fm-send.sh fm-<id> "<request>"`, so the live secondmate drafts its own plan, including the uncaptured knowledge that exists only in its session.
+  Read its reply from its status file or the document it points to, never from its chat: a plan pointer, or a line saying its plan is empty.
+  After review, its approved items go back as the marked request `bin/fm-stow-plan.sh request <id>` prints, and it replies with one correlated line naming what it wrote.
+- `direct` - draft that local home's plan into its own `state/stow-plan.json` yourself under the same retention plan, apply its approved items there after review, then re-run the cascade to confirm the after totals.
   `data/captain-shared.md` stays a read-only counted input there, exactly as it is in any secondmate home.
 - `deferred` - a remote home with no live agent. Its memory is accounted read-only and cannot be curated from here, because there is no generic remote write path for a home's own memory files.
   Report it as an unresolved exception and leave it to its next cascade.
