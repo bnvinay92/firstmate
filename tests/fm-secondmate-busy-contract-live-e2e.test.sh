@@ -13,6 +13,8 @@
 # up beside the wiring the spawn just wrote. Grok and codex are the
 # disconfirming launches: they stay unarmed and gain no parent turn-end.
 # An absent binary is reported and skipped. A run that checks nothing fails.
+# Portable serial CI installs no supported harness, so it turns this guard off
+# with FM_SECONDMATE_BUSY_LIVE=0.
 #
 # Refresh docs/verification/runtime-backends.md ("Secondmate busy contract")
 # from this guard after a harness upgrade.

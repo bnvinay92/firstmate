@@ -706,38 +706,6 @@ test_secondmate_pi_extension_reports_busy_without_a_parent_turnend() {
   pass "a pi secondmate loads the busy extension beside its primary extensions and does not emit a parent turn-end"
 }
 
-test_secondmate_omp_extension_reports_busy_without_a_parent_turnend() {
-  local case_dir id=sm-omp primary state ext launch out
-  case_dir="$TMP_ROOT/sm-omp"
-  primary="$case_dir/primary"
-  out=$(spawn_secondmate_harness "$case_dir" "$id" omp) \
-    || fail "omp secondmate spawn failed: $out"
-  state="$primary/state"
-  ext="$state/$id.omp-ext.ts"
-  launch=$(cat "$case_dir/launch.log")
-  assert_present "$ext" "omp secondmate spawn did not write the busy extension"
-  assert_contains "$launch" "$ext" "omp secondmate launch did not name the busy extension"
-  assert_contains "$launch" "--cwd" "omp secondmate launch dropped its cwd pin"
-  out=$(classify omp "$id" "$state")
-  [ "$out" = "busy fm-spawn" ] || fail "omp secondmate seed must be busy fm-spawn, got '$out'"
-  rm -f "$state/$id.turn-ended"
-  out=$(drive_pi_ext "$ext" turn-end) || fail "omp secondmate turn_end drive failed: $out"
-  [ ! -e "$state/$id.turn-ended" ] || fail "omp secondmate turn_end touched the parent's turn-ended marker"
-  out=$(classify omp "$id" "$state")
-  [ "$out" = "busy fm-spawn" ] || fail "omp secondmate turn_end must stay a notification, got '$out'"
-  # drive_pi_ext has no agent_end mode. Fire the omp handler through node.
-  EXT_PATH="$ext" node --input-type=module <<'EOF'
-import { pathToFileURL } from "node:url";
-const mod = await import(pathToFileURL(process.env.EXT_PATH).href);
-const handlers = {};
-mod.default({ on: (name, fn) => { handlers[name] = fn; } });
-await handlers["agent_end"]({ willContinue: false }, {});
-EOF
-  out=$(classify omp "$id" "$state")
-  [ "$out" = "idle omp-ext" ] || fail "omp secondmate agent_end must classify idle omp-ext, got '$out'"
-  pass "an omp secondmate names only the out-of-home busy extension and does not emit a parent turn-end"
-}
-
 test_secondmate_opencode_plugin_closes_without_a_parent_turnend() {
   local case_dir id=sm-oc primary sm state plugin out
   case_dir="$TMP_ROOT/sm-oc"
@@ -764,7 +732,7 @@ test_secondmate_opencode_plugin_closes_without_a_parent_turnend() {
 # updated by the launched command.
 test_raw_secondmate_launch_writes_no_busy_wiring() {
   local harness raw case_dir id state sm out launch
-  for harness in claude pi pi-signed omp; do
+  for harness in claude pi pi-signed; do
     case_dir="$TMP_ROOT/sm-raw-$harness"
     id="sm-raw-$harness"
     raw="$harness --fm-raw-flag"
@@ -780,7 +748,6 @@ test_raw_secondmate_launch_writes_no_busy_wiring() {
     assert_absent "$sm/.fm-busy-stop" "raw $harness secondmate wrote the Stop pointer"
     assert_absent "$sm/.claude/settings.local.json" "raw $harness secondmate wrote the home's settings.local.json"
     assert_absent "$state/$id.pi-ext.ts" "raw $harness secondmate wrote the Pi busy extension"
-    assert_absent "$state/$id.omp-ext.ts" "raw $harness secondmate wrote the omp busy extension"
     out=$(classify "$harness" "$id" "$state")
     [ "$out" = "unknown missing" ] || fail "raw $harness secondmate must classify unknown missing, got '$out'"
   done
@@ -803,7 +770,7 @@ test_raw_secondmate_launch_writes_no_busy_wiring() {
   assert_absent "$sm/.fm-busy-stop" "raw respawn kept the earlier Stop pointer"
   out=$(classify claude "$id" "$state")
   [ "$out" = "unknown missing" ] || fail "raw respawn over an armed secondmate must classify unknown missing, got '$out'"
-  pass "a raw claude, pi, pi-signed, or omp secondmate launch writes no busy wiring and classifies unknown"
+  pass "a raw claude, pi, or pi-signed secondmate launch writes no busy wiring and classifies unknown"
 }
 
 test_secondmate_codex_and_grok_do_not_arm_a_parent_turnend() {
@@ -840,7 +807,6 @@ test_secondmate_claude_stop_guard_owns_the_stop_verdict
 test_secondmate_claude_older_home_guard_keeps_the_stop_idle_hook
 test_secondmate_claude_spawn_leaves_local_settings_untouched
 test_secondmate_pi_extension_reports_busy_without_a_parent_turnend
-test_secondmate_omp_extension_reports_busy_without_a_parent_turnend
 test_secondmate_opencode_plugin_closes_without_a_parent_turnend
 test_secondmate_codex_and_grok_do_not_arm_a_parent_turnend
 test_pi_extension_semantic_lifecycle
