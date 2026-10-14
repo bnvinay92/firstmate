@@ -1611,7 +1611,7 @@ SH
 
 test_opencode_arm_plugin_decides_with_the_shared_predicate() {
   command -v node >/dev/null 2>&1 || { printf 'skip: node not found\n'; return 0; }
-  local driver case_name dir state config out status
+  local driver case_name dir state out status
   driver="$TMP_ROOT/arm-decision-driver.mjs"
   cat > "$driver" <<'EOF'
 import { existsSync, writeFileSync } from "node:fs";
@@ -1619,7 +1619,6 @@ import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
 const state = `${process.env.FM_HOME}/state`;
-const config = `${process.env.FM_HOME}/config`;
 const armLog = process.env.FM_ARM_LOG;
 
 // The shared predicate verdict over the same state directory and the same lib
@@ -1641,10 +1640,9 @@ if (verdict !== "arm" && verdict !== "no-arm") {
   process.exit(1);
 }
 
-// The two local overrides: an away record declines even when the predicate
-// reads needed, because away mode owns supervision through its daemon, and an
-// x-mode home arms before its relay poll is registered. Every other state
-// directory must match the shared verdict exactly.
+// The one local override: an away record declines even when the predicate
+// reads needed, because away mode owns supervision through its daemon. Every
+// other state directory must match the shared verdict exactly.
 let expected;
 if (existsSync(`${state}/.afk`)) {
   if (verdict !== "arm") {
@@ -1652,12 +1650,6 @@ if (existsSync(`${state}/.afk`)) {
     process.exit(1);
   }
   expected = "no-arm";
-} else if (existsSync(`${config}/x-mode.env`)) {
-  if (verdict !== "no-arm") {
-    console.error(`x-mode fixture unexpectedly reads as needed: predicate said ${verdict}`);
-    process.exit(1);
-  }
-  expected = "arm";
 } else {
   expected = verdict;
 }
@@ -1687,10 +1679,9 @@ if (!existsSync(armLog)) {
 }
 process.exit(0);
 EOF
-  for case_name in source registered-check empty afk-with-source task-meta x-mode; do
+  for case_name in source registered-check empty afk-with-source task-meta; do
     dir=$(make_arm_decision_fixture "opencode-arm-$case_name")
     state="$dir/home/state"
-    config="$dir/home/config"
     case "$case_name" in
       source) mkdir -p "$state/procevent"; : > "$state/procevent/fixture.source" ;;
       registered-check) : > "$state/fixture.check.sh"; : > "$state/fixture.check-trust" ;;
@@ -1701,7 +1692,6 @@ EOF
         : > "$state/.afk"
         ;;
       task-meta) : > "$state/fixture.meta" ;;
-      x-mode) : > "$config/x-mode.env" ;;
     esac
     out=$(FM_ROOT_OVERRIDE="$dir/repo" WORKTREE="$dir/repo" FM_HOME="$dir/home" \
       FM_ARM_LOG="$dir/arm.log" NODE_NO_WARNINGS=1 \
