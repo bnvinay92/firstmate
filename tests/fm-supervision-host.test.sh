@@ -386,6 +386,81 @@ test_report_after_the_return_is_queued_for_main() {
   pass "report surface: visible late outcomes queue a relay, while silent outcomes remain stored without a wake or note"
 }
 
+# A secondmate listed in config/routine-child-outcomes has its per-child
+# outcome lines stored routine even when the branch reported captain, while its
+# own lines, a liveness wake, and an unlisted mate keep the captain verdict.
+test_report_stores_listed_secondmate_child_outcomes_as_routine() {
+  local home state out rc
+  home="$TMP_ROOT/report-child-outcomes"
+  state="$home/state"
+  mkdir -p "$state" "$home/config"
+  printf 'kind=secondmate\n' > "$state/mate.meta"
+  printf '# relay only run-level lines\n  mate  \n' > "$home/config/routine-child-outcomes"
+  child_line() {  # <child>
+    printf 'done [key=child-outcome-%s-done-0f235aac] [at=%s]: child %s done: report complete report=data/%s/report.md\n' \
+      "$1" "$(date +%s)" "$1" "$1" >> "$state/mate.status"
+  }
+  claim() {  # <turn> <seq> <kind> <payload>
+    printf '%s\t%s\t%s\tmate.status\t%s\n' "$(date +%s)" "$2" "$3" "$4" >> "$state/.wake-queue"
+    printf 'turn=%s\nrows=%s\ntasks=mate\nunscoped=0\nwake=%s\nposture=attended\n' "$1" "$2" "$4" > "$state/.supervision-host-turn"
+  }
+  report() {  # <turn>
+    FM_HOME="$home" FM_SUPERVISION_ACTOR=branch FM_BRANCH_REPORT_TURN=$1 "$REPORT" \
+      --task mate --verdict captain --summary 'a scout finished' 2>&1
+  }
+
+  child_line d5-objectives
+  child_line d6-objectives
+  claim t1 1 signal "signal: $state/mate.status"
+  out=$(report t1); rc=$?
+  expect_code 0 "$rc" "a listed mate's child outcomes must still be recorded"
+  assert_contains "$out" "stored as routine" "the response must say the outcome was stored routine"
+  assert_contains "$out" "recorded seq 1 [routine]" "the response must carry the stored verdict"
+  assert_re '"seq":1,.*"verdict":"routine"' "$state/branch-outcomes.jsonl" "child outcomes alone must be stored routine"
+  [ "$(cat "$state/.supervision-host-receipts")" = "$(printf 't1\t1\troutine\tmate')" ] \
+    || fail "the host receipt must carry the routine verdict so no MAIN turn opens: $(cat "$state/.supervision-host-receipts")"
+
+  printf 'blocked [key=run-1] [at=%s]: run 1 stopped: the spike harness is missing\n' "$(date +%s)" >> "$state/mate.status"
+  child_line d7-objectives
+  claim t2 2 signal "signal: $state/mate.status"
+  out=$(report t2); rc=$?
+  expect_code 0 "$rc" "a mate's own blocker must be recorded"
+  assert_contains "$out" "recorded seq 2 [captain]" "the mate's own blocker beside a child outcome must stay captain"
+
+  child_line d8-objectives
+  claim t3 3 signal "signal: $state/mate.status"
+  out=$(report t3); rc=$?
+  assert_contains "$out" "recorded seq 3 [routine]" "only the lines after the previous outcome are judged"
+
+  claim t4 4 signal "signal: $state/mate.status"
+  out=$(report t4); rc=$?
+  assert_contains "$out" "recorded seq 4 [captain]" "a report covering no new line must stay captain"
+
+  child_line d9-objectives
+  claim t5 5 stale "stale: fm-mate"
+  out=$(report t5); rc=$?
+  assert_contains "$out" "recorded seq 5 [captain]" "a liveness wake must keep the captain verdict"
+
+  child_line d10-objectives
+  claim t6 6 signal "needs-decision: $state/mate.status"
+  out=$(report t6); rc=$?
+  assert_contains "$out" "recorded seq 6 [captain]" "a decision-owned row must keep the captain verdict"
+
+  child_line d11-objectives
+  printf 'other\n' > "$home/config/routine-child-outcomes"
+  claim t7 7 signal "signal: $state/mate.status"
+  out=$(report t7); rc=$?
+  assert_contains "$out" "recorded seq 7 [captain]" "an unlisted mate must keep the captain verdict"
+
+  child_line d12-objectives
+  printf 'mate\n' > "$home/config/routine-child-outcomes"
+  printf 'kind=ship\n' > "$state/mate.meta"
+  claim t8 8 signal "signal: $state/mate.status"
+  out=$(report t8); rc=$?
+  assert_contains "$out" "recorded seq 8 [captain]" "a task that is not a secondmate must keep the captain verdict"
+  pass "report surface: a listed secondmate's per-child outcomes are stored routine, and nothing else is"
+}
+
 # --- dispatch entry -----------------------------------------------------------
 
 test_dispatch_entry_scopes_rows_and_renders_the_away_tail() {
@@ -2960,6 +3035,7 @@ test_claude_stop_hook_notifies_when_closed_announced_successor_downtime_restore_
 test_park_exit_probe_uses_half_second_child_sleeps
 test_report_surface_enforces_actor_turn_and_scope
 test_report_after_the_return_is_queued_for_main
+test_report_stores_listed_secondmate_child_outcomes_as_routine
 test_dispatch_entry_scopes_rows_and_renders_the_away_tail
 test_branch_outcomes_only_on_a_host_home_off_pi
 test_branch_outcomes_put_captain_first_and_collapse_routine_overflow

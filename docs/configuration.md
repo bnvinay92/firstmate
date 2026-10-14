@@ -11,7 +11,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Task windows and worker tools | [Runtime backend](#runtime-backend-configbackend--fm_backend) and [harness support](#harness-support) |
 | Worker permissions, accounts, or environment | [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), [worker tool exclusions](#worker-tool-exclusions-configcrew-exclude-tools), and [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist) |
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
-| Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), and [Calm preference](#calm-preference-configcalm) |
+| Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), [routine child outcomes](#routine-child-outcomes-configroutine-child-outcomes), and [Calm preference](#calm-preference-configcalm) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
 | Per-run overrides and tuning | [Environment variables](#environment-variables) |
 
@@ -336,6 +336,17 @@ The opt-out is inherited into secondmate homes: a primary that opts out also opt
 The primary-authoritative propagation contract, including removal of a mate's local opt-out when the primary has none, is owned by [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md).
 `config/supervision-host` is local to each home and not inherited, because each home's engine and model are its own choice.
 While the home runs the host, main's lease-checked commands also take the per-task lease lock, so a claim by the host's engine cannot race a mutation main already started (`bin/fm-lease-lib.sh`).
+
+## Routine child outcomes (config/routine-child-outcomes)
+
+The optional local, gitignored `config/routine-child-outcomes` file lists registered secondmate ids, one per line, whose per-child outcome lines stay off main on a home that runs the supervision host.
+Blank lines and `#` comments are ignored.
+A secondmate's scripts publish each finished or failed child's terminal line on its parent channel with a `child-outcome-*` key ([secondmate-parent-channel.md](secondmate-parent-channel.md)).
+For a listed secondmate, a captain verdict the host's engine reports for a plain signal wake is stored as a routine outcome when every status line it newly covers is such a line, so it opens no main turn and the next drain lists it once for awareness.
+Every other line keeps the engine's verdict, including the secondmate's own gates, decisions, blockers, and failures, its answers to marked requests, a held task, and a child's `child-pr-*` PR-ready line, and so does any stale or decision-owned wake.
+A child's failed or blocked line still reaches the secondmate itself, which decides what reaches main.
+`bin/fm-branch-report.sh` owns eligibility and `bin/fm-branch-outcome.sh` owns the covered-span test.
+The file is a home-local relay preference and is not inherited by secondmate homes.
 
 ## Backlog backend (.tasks.toml / config/backlog-backend)
 

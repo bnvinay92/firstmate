@@ -77,8 +77,18 @@
 #
 # Usage:
 #   fm-branch-outcome.sh append --task <id> --verdict routine|captain \
-#       --summary <text> [--wake <text>] [--silent true|false]
+#       --summary <text> [--wake <text>] [--silent true|false] \
+#       [--routine-child-outcomes]
 #     Append one outcome record; prints the assigned seq.
+#     --routine-child-outcomes stores a captain verdict as routine when the
+#     task's status lines this outcome newly covers - after the endpoint its
+#     previous outcome recorded, through the endpoint this one records, read
+#     under the lock - are nonempty and every one carries a child-outcome-*
+#     key (the per-child terminal lines bin/fm-inactive-reconcile.sh publishes
+#     on a secondmate's parent channel). Any other line, an empty span, or an
+#     unproven previous endpoint keeps the captain verdict. With the flag the
+#     output is "<seq> <stored verdict>". Only the caller decides eligibility
+#     (bin/fm-branch-report.sh, docs/configuration.md "Routine child outcomes").
 #   fm-branch-outcome.sh unread
 #     Print every unread record (raw JSONL). Exit 0 with no output when none.
 #   fm-branch-outcome.sh mark-read --through <seq>
@@ -163,7 +173,7 @@ RECORDED_AGO_JQ='def recorded_ago: ([$now - .epoch, 0] | max) as $s
     else "\($s / 86400 | floor)d" end;'
 
 usage() {
-  echo "usage: fm-branch-outcome.sh append --task <id> --verdict routine|captain --summary <text> [--wake <text>] [--silent true|false] | unread | mark-read --through <seq> | unprocessed | mark-processed --through <seq> | present | processed-init [--held-lock] | list [--recent <n>] | lookup --seqs <n,...> | startup-replay | seed-tail" >&2
+  echo "usage: fm-branch-outcome.sh append --task <id> --verdict routine|captain --summary <text> [--wake <text>] [--silent true|false] [--routine-child-outcomes] | unread | mark-read --through <seq> | unprocessed | mark-processed --through <seq> | present | processed-init [--held-lock] | list [--recent <n>] | lookup --seqs <n,...> | startup-replay | seed-tail" >&2
   exit 2
 }
 
@@ -290,6 +300,48 @@ capture_status_position() { # <task>
   case "$ident" in *$'\t'*|*$'\n'*|'') return 0 ;; esac
   CAPTURED_STATUS_ENDPOINT=$size
   CAPTURED_STATUS_IDENT=$ident
+}
+
+# The status endpoint <task>'s previous outcome recorded, when the bounded index
+# proves it for the status file captured by capture_status_position; else 0,
+# so an unproven span reads from the start of the log and covers more lines.
+previous_status_endpoint() { # <task>
+  local path data version seq endpoint ident extra
+  path=$(outcome_index_path "$1") || { printf '0'; return 0; }
+  if [ ! -f "$OUTCOME_INDEX_READY" ] || [ -L "$OUTCOME_INDEX_READY" ] \
+    || [ ! -f "$path" ] || [ -L "$path" ] \
+    || ! data=$(head -c "$OUTCOME_INDEX_MAX_BYTES" "$path" 2>/dev/null); then
+    printf '0'
+    return 0
+  fi
+  IFS=$'\t' read -r version seq endpoint ident extra <<EOF
+$data
+EOF
+  if [ "$version" != "$OUTCOME_INDEX_VERSION" ] || [ -n "$extra" ] \
+    || ! bounded_uint "$endpoint" || [ "$ident" != "$CAPTURED_STATUS_IDENT" ] \
+    || [ "$endpoint" -gt "$CAPTURED_STATUS_ENDPOINT" ]; then
+    printf '0'
+    return 0
+  fi
+  printf '%s' "$endpoint"
+}
+
+# 0 when the status lines <task>'s new outcome covers are nonempty and every
+# one carries a child-outcome-* key; see the append usage above.
+covered_span_child_outcomes_only() { # <task>
+  local f="$STATE/$1.status" start span line key seen=0
+  [ "$CAPTURED_STATUS_ENDPOINT" -gt 0 ] || return 1
+  start=$(previous_status_endpoint "$1")
+  [ "$start" -lt "$CAPTURED_STATUS_ENDPOINT" ] || return 1
+  span=$(_fm_status_read_span "$f" "$start" "$((CAPTURED_STATUS_ENDPOINT - start))") || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in *[![:space:]]*) ;; *) continue ;; esac
+    key=$(_fm_decision_key "$line" '') || return 1
+    case "$key" in child-outcome-?*) seen=1 ;; *) return 1 ;; esac
+  done <<EOF
+$span
+EOF
+  [ "$seen" -eq 1 ]
 }
 
 write_outcome_index() { # <task> <seq> [<endpoint> <identity>]
@@ -503,6 +555,7 @@ case "$CMD" in
     SUMMARY=''
     WAKE=''
     SILENT=false
+    ROUTINE_CHILD_OUTCOMES=0
     while [ "$#" -gt 0 ]; do
       case "$1" in
         --task) TASK=${2:-}; shift 2 || usage ;;
@@ -510,6 +563,7 @@ case "$CMD" in
         --summary) SUMMARY=${2:-}; shift 2 || usage ;;
         --wake) WAKE=${2:-}; shift 2 || usage ;;
         --silent) SILENT=${2:-}; shift 2 || usage ;;
+        --routine-child-outcomes) ROUTINE_CHILD_OUTCOMES=1; shift ;;
         *) usage ;;
       esac
     done
@@ -535,6 +589,10 @@ case "$CMD" in
     fi
     SEQ=$(( LAST_SEQ + 1 ))
     capture_status_position "$TASK"
+    if [ "$ROUTINE_CHILD_OUTCOMES" -eq 1 ] && [ "$VERDICT" = captain ] \
+      && covered_span_child_outcomes_only "$TASK"; then
+      VERDICT=routine
+    fi
     rm -f -- "$OUTCOME_INDEX_READY" || { fm_lock_release "$LOCK"; exit 1; }
     printf '{"seq":%s,"epoch":%s,"task":"%s","wake":"%s","verdict":"%s","summary":"%s","silent":%s,"statusEndpoint":%s,"statusIdent":"%s"}\n' \
       "$SEQ" "$(date +%s)" "$(json_escape "$TASK")" "$(json_escape "$WAKE")" \
@@ -557,7 +615,11 @@ case "$CMD" in
       exit 1
     fi
     fm_lock_release "$LOCK"
-    printf '%s\n' "$SEQ"
+    if [ "$ROUTINE_CHILD_OUTCOMES" -eq 1 ]; then
+      printf '%s %s\n' "$SEQ" "$VERDICT"
+    else
+      printf '%s\n' "$SEQ"
+    fi
     ;;
   unread)
     [ "$#" -eq 0 ] || usage
