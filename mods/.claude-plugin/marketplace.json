@@ -1,0 +1,5 @@
+{
+  "name": "firstmate-mods",
+  "owner": { "name": "Firstmate contributors" },
+  "plugins": [{ "name": "stow-review", "source": "./stow-review" }]
+}
