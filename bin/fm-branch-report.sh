@@ -22,6 +22,15 @@
 # or captain"); --silent true is legal only for a routine outcome.
 # --wake defaults to the wake reason the host recorded for the turn.
 #
+# Routine child outcomes (docs/configuration.md "Routine child outcomes"): when
+# config/routine-child-outcomes lists the reported task, the task's meta says
+# kind=secondmate, and every row the turn claims is still queued as a plain
+# signal row (no stale, check, heartbeat, or needs-decision row), a captain
+# report is appended with --routine-child-outcomes, so bin/fm-branch-outcome.sh
+# stores it routine exactly when the status lines it covers are all that
+# secondmate's per-child child-outcome-* lines. The receipt and response carry
+# the stored verdict, so such an outcome never opens a MAIN turn.
+#
 # Only the branch actor of a live host turn may report: FM_SUPERVISION_ACTOR
 # must be "branch" and FM_BRANCH_REPORT_TURN must name the host's current turn
 # record ($STATE/.supervision-host-turn), so a report typed after its turn
@@ -48,6 +57,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 TURN_FILE="$STATE/.supervision-host-turn"
 RECEIPTS="$STATE/.supervision-host-receipts"
 # shellcheck source=bin/fm-afk-contract.sh
@@ -117,11 +127,46 @@ fi
 
 [ "$WAKE_SET" -eq 1 ] || WAKE=$(turn_field wake)
 
+# 0 when this captain report may have its verdict decided by the covered span;
+# see "Routine child outcomes" above.
+routine_child_outcomes_eligible() {
+  local rows queue
+  [ "$VERDICT" = captain ] && [ "$(turn_field unscoped)" != 1 ] || return 1
+  [ -f "$CONFIG/routine-child-outcomes" ] \
+    && sed 's/#.*//; s/^[[:space:]]*//; s/[[:space:]]*$//' "$CONFIG/routine-child-outcomes" 2>/dev/null \
+      | grep -qxF -- "$TASK" || return 1
+  [ "$(sed -n 's/^kind=//p' "$STATE/$TASK.meta" 2>/dev/null | tail -n 1)" = secondmate ] || return 1
+  rows=$(turn_field rows)
+  queue=${FM_WAKE_QUEUE:-$STATE/.wake-queue}
+  [ -n "$rows" ] && [ -f "$queue" ] || return 1
+  awk -F '\t' -v seqs="$rows" '
+    BEGIN { n = split(seqs, list, " "); for (i = 1; i <= n; i++) want[list[i]] = 1 }
+    NF >= 5 && ($2 in want) {
+      if ($3 != "signal" || $5 ~ /^needs-decision:/) bad = 1
+      delete want[$2]
+    }
+    END { for (s in want) bad = 1; exit bad }
+  ' "$queue"
+}
+
 set -- append --task "$TASK" --verdict "$VERDICT" --summary "$SUMMARY" --silent "$SILENT"
 [ -z "$WAKE" ] || set -- "$@" --wake "$WAKE"
+DEMOTABLE=0
+if routine_child_outcomes_eligible; then
+  DEMOTABLE=1
+  set -- "$@" --routine-child-outcomes
+fi
 if ! SEQ=$("$SCRIPT_DIR/fm-branch-outcome.sh" "$@"); then
   echo "outcome store append failed (nothing recorded)" >&2
   exit 1
+fi
+if [ "$DEMOTABLE" -eq 1 ]; then
+  STORED=${SEQ#* }
+  SEQ=${SEQ%% *}
+  if [ "$STORED" = routine ]; then
+    VERDICT=routine
+    printf 'stored as routine: %s is listed in config/routine-child-outcomes and these status lines are only its per-child outcomes\n' "$TASK"
+  fi
 fi
 printf '%s\t%s\t%s\t%s\n' "$TURN" "$SEQ" "$VERDICT" "$TASK" >> "$RECEIPTS" || {
   echo "recorded seq $SEQ, but the host receipt could not be written; the host will hand this wake to MAIN" >&2
