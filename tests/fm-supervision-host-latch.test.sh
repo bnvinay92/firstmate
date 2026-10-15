@@ -186,6 +186,6 @@ test_latch_keeps_attended_closes_on_main_and_skips_unopted_homes() {
   pass "host: an attended close in a latched session reaches main as the arm printed it and leaves the latch as it was, and a home that opted out with off never reads it"
 }
 
-test_latch_trips_after_two_engine_errors_then_probes_and_recovers
-test_latch_keeps_attended_closes_on_main_and_skips_unopted_homes
-test_attended_latch_keeps_closes_on_main_and_records_recovery_off_main
+run_case test_latch_trips_after_two_engine_errors_then_probes_and_recovers
+run_case test_latch_keeps_attended_closes_on_main_and_skips_unopted_homes
+run_case test_attended_latch_keeps_closes_on_main_and_records_recovery_off_main

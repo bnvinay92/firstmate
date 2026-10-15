@@ -203,6 +203,18 @@ suite_cleanup() {
 }
 trap suite_cleanup EXIT
 
+# Run one case, then stop whatever the homes it made left running. Without
+# this, every earlier case's watcher and host keep polling until the suite
+# exits, and the later cases slow down under that load.
+run_case() {  # <case function>
+  local before home
+  before=$(wc -l < "$HOMES_FILE" 2>/dev/null || echo 0)
+  "$1"
+  while IFS= read -r home; do
+    [ -n "$home" ] && stop_home_processes "$home"
+  done < <(tail -n +"$((before + 1))" "$HOMES_FILE" 2>/dev/null)
+}
+
 make_home() {  # <name> <attended|away|quiet> [config line]
   local home="$TMP_ROOT/$1"
   mkdir -p "$home/state" "$home/config" "$home/fakebin"
