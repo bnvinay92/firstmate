@@ -496,7 +496,7 @@
 # with this repo, defaults back to on when unset, and only feeds the CLI's
 # request to the server, so it suppresses the trailer rather than preventing
 # it). Unless config/keep-ai-trailers is present, every spawn installs
-# state/<id>.git-hooks as a GIT_CONFIG core.hooksPath for the pane, so git
+# state/<id>.git-hooks as an appended GIT_CONFIG core.hooksPath entry for the pane, so git
 # commit-msg strips known AI trailers at the commit object for every launched
 # runtime, Claude included as defense in depth. bin/fm-git-strip-ai-trailers.sh
 # owns the identities, the hook install, and chaining the repository git is
@@ -694,6 +694,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
+# shellcheck source=bin/fm-role-lib.sh
+. "$SCRIPT_DIR/fm-role-lib.sh"
 # shellcheck source=bin/fm-trace-context-lib.sh
 . "$SCRIPT_DIR/fm-trace-context-lib.sh"
 # shellcheck source=bin/fm-remote-readiness-lib.sh
@@ -729,6 +731,8 @@ YOLO_SET=0
 BRANCH_PREFIX_SET=0
 BASE_BRANCH=
 BASE_BRANCH_SET=0
+UPSTREAM_CONSENT=
+UPSTREAM_CONSENT_SET=0
 TRACEPARENT_SET=0
 RELAUNCH=0
 # Opt-in only: exact-resume presentation-order lock waits instead of refusing.
@@ -776,6 +780,10 @@ for a in "$@"; do
     base-branch)
       BASE_BRANCH=$a
       BASE_BRANCH_SET=1
+      ;;
+    upstream-consent)
+      UPSTREAM_CONSENT=$a
+      UPSTREAM_CONSENT_SET=1
       ;;
     traceparent)
       TRACEPARENT_ARG=$a
@@ -840,6 +848,11 @@ for a in "$@"; do
     BASE_BRANCH=${a#--base-branch=}
     BASE_BRANCH_SET=1
     ;;
+  --upstream-consent) want_value="upstream-consent" ;;
+  --upstream-consent=*)
+    UPSTREAM_CONSENT=${a#--upstream-consent=}
+    UPSTREAM_CONSENT_SET=1
+    ;;
   --traceparent) want_value=traceparent ;;
   --traceparent=*)
     TRACEPARENT_ARG=${a#--traceparent=}
@@ -874,6 +887,10 @@ done
 }
 [ "$YOLO_SET" -eq 0 ] || [ -n "$YOLO" ] || {
   echo "error: --yolo requires a non-empty value" >&2
+  exit 1
+}
+[ "$UPSTREAM_CONSENT_SET" -eq 0 ] || [ -n "$UPSTREAM_CONSENT" ] || {
+  echo "error: --upstream-consent requires a non-empty <host>/<owner>/<repo> value" >&2
   exit 1
 }
 [ "$TRACEPARENT_SET" -eq 0 ] || [ -n "$TRACEPARENT_ARG" ] || {
@@ -930,6 +947,10 @@ if [ "$RELAUNCH" -eq 1 ]; then
     echo "error: --relaunch reuses the task's recorded base branch; --base-branch cannot override it" >&2
     exit 1
   }
+  [ "$UPSTREAM_CONSENT_SET" -eq 0 ] || {
+    echo "error: --relaunch reuses the task's recorded upstream consent; --upstream-consent cannot override it" >&2
+    exit 1
+  }
 else
   # Delivery contract (AGENTS.md section 7). A ship task's mode and yolo are
   # firstmate's per-task decision, so they are required and closed-set validated
@@ -962,6 +983,17 @@ else
       exit 1
       ;;
     esac
+    if [ "$UPSTREAM_CONSENT_SET" -eq 1 ]; then
+      if [ "$MODE" = local-only ]; then
+        echo "error: --upstream-consent is meaningless on local-only, which publishes nothing; drop it" >&2
+        exit 1
+      fi
+      fm_role_scope_valid "$UPSTREAM_CONSENT" || {
+        echo "error: --upstream-consent must be <host>/<owner>/<repo> (got '$UPSTREAM_CONSENT')" >&2
+        exit 1
+      }
+      UPSTREAM_CONSENT=$(fm_role_scope_norm "$UPSTREAM_CONSENT")
+    fi
   else
     [ "$MODE_SET" -eq 0 ] || {
       echo "error: --mode applies only to ship spawns; a scout delivers a report and a secondmate records its own fixed posture" >&2
@@ -977,6 +1009,10 @@ else
     }
     [ "$KIND" != secondmate ] || [ "$BASE_BRANCH_SET" -eq 0 ] || {
       echo "error: --base-branch applies only to ship and scout spawns; a secondmate charter has no task base" >&2
+      exit 1
+    }
+    [ "$UPSTREAM_CONSENT_SET" -eq 0 ] || {
+      echo "error: --upstream-consent applies only to ship spawns; a scout publishes nothing and a secondmate records no delivery contract" >&2
       exit 1
     }
   fi
@@ -1644,7 +1680,7 @@ if [ "$RELAUNCH" -ne 1 ]; then
   fm_lease_forbid_branch "new-task spawn (fm-spawn)" --away-relocated
 fi
 spawn_refuse_if_away_spend_cap() {
-  local cap live meta
+  local cap live
   [ "$RELAUNCH" -ne 1 ] || return 0
   [ "$KIND" != secondmate ] || return 0
   [ -f "$STATE/.afk-contract" ] || return 0
@@ -1654,12 +1690,13 @@ spawn_refuse_if_away_spend_cap() {
   case "$cap" in
   '' | *[!0-9]* | 0) return 0 ;;
   esac
-  live=0
-  for meta in "$STATE"/*.meta; do
-    [ -f "$meta" ] || continue
-    [ "$(grep '^kind=' "$meta" 2>/dev/null | tail -1 | cut -d= -f2-)" != secondmate ] || continue
-    live=$((live + 1))
-  done
+  live=$(FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-afk-contract.sh" live-workers 2>/dev/null || true)
+  case "$live" in
+  '' | *[!0-9]*)
+    echo "error: spawn refused - the away-posture record caps concurrent workers at $cap and this home's live ordinary task count could not be read; task $ID stays queued (spend cap: bin/fm-afk-contract.sh)" >&2
+    exit 1
+    ;;
+  esac
   if [ "$live" -ge "$cap" ]; then
     echo "error: spawn refused - the away-posture record caps concurrent workers at $cap and $live ordinary task(s) are live in this home; task $ID stays queued for the captain's return or for a worker to finish (spend cap: bin/fm-afk-contract.sh)" >&2
     exit 1
@@ -1669,10 +1706,10 @@ spawn_refuse_if_away_spend_cap() {
 # away record exists (never a quiet-mode one, whose captain is present and
 # spends as attended: bin/fm-afk-contract.sh mode), a fresh ordinary spawn
 # refuses for BOTH actors once this home already holds that many ordinary task
-# records, counted the same way the return brief counts tasks live at return
-# (every state/*.meta whose kind is not secondmate). A relaunch replaces a
-# worker that already counts, and a secondmate is a persistent home rather than
-# spend, so both are exempt. Checked before any endpoint, worktree, or record
+# records, counted by that script's own `live-workers`, which is also the count
+# its entry records as the cap. A relaunch replaces a worker that already
+# counts, and a secondmate is a persistent home rather than spend, so both are
+# exempt. Checked before any endpoint, worktree, or record
 # exists, so a refusal costs nothing to unwind; rechecked after the task-set
 # lock so two fresh spawns cannot both publish from a stale count.
 spawn_refuse_if_away_spend_cap
@@ -1912,6 +1949,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
   fi
   MODE=$(fm_meta_get "$RELAUNCH_META" mode)
   YOLO=$(fm_meta_get "$RELAUNCH_META" yolo)
+  UPSTREAM_CONSENT=$(fm_meta_get "$RELAUNCH_META" upstream_consent)
   if [ "$KIND" = ship ]; then
     BRANCH=$(fm_meta_get "$RELAUNCH_META" branch)
     [ -n "$BRANCH" ] || BRANCH="fm/$ID"
@@ -3329,6 +3367,15 @@ if [ "$KIND" = ship ]; then
     echo "error: delivery mismatch for $ID: the brief says mode=$BRIEF_MODE but this spawn passed --mode $MODE; correct the flag or re-scaffold the brief so the worker's instructions and the task record agree" >&2
     exit 1
   fi
+  # A firstmate-repository contribution records its one-task publication consent
+  # as an upstream-consent= token on that same line; like mode and forge, the
+  # brief and the spawn flag must agree so the worker's contract and the task
+  # record carry the same authority.
+  BRIEF_CONSENT=$(sed -n 's/^Delivery contract: mode=[^ ]*.*[[:space:]]upstream-consent=\([^ ]*\).*$/\1/p' "$BRIEF" | head -n 1)
+  if [ "$BRIEF_CONSENT" != "$UPSTREAM_CONSENT" ]; then
+    echo "error: upstream-consent mismatch for $ID: $BRIEF records upstream-consent=${BRIEF_CONSENT:-none} but this spawn passed ${UPSTREAM_CONSENT:-none}; correct the flag or re-scaffold the brief so the worker's contract and the task record agree" >&2
+    exit 1
+  fi
   # The registered forge is the captain's confirmed binding (bin/fm-project-mode.sh)
   # and is never inferred here from a remote, host, or protocol. A brief that
   # disagrees with it would tell the worker to open a pull request a Gerrit
@@ -3349,6 +3396,24 @@ if [ "$KIND" = ship ]; then
   if [ "$STANDING_FORGE" = gerrit ] && [ "$YOLO" = on ]; then
     echo "error: --yolo on is refused for $ID: $PROJ_NAME is registered forge=gerrit, where yolo is inactive because a Code-Review+2 is a positive attributed claim that a named human approved and firstmate must not manufacture one (captain's decision 2026-09-15); spawn with --yolo off" >&2
     exit 1
+  fi
+  # Self-repository publication gate (bin/fm-role-lib.sh): a ship task whose
+  # project is firstmate's own repository may launch a publishing contract only
+  # under an explicit grant - this home's maintainer scope in
+  # config/firstmate-role, or this one task's recorded upstream consent. Every
+  # other project passes through unchanged; local-only publishes nothing and
+  # never reaches this gate.
+  if [ "$MODE" != local-only ]; then
+    gate_rc=0
+    fm_role_gate_self_publish "$FM_HOME" "$CONFIG" "$PROJ_ABS" "$FM_ROOT" "$UPSTREAM_CONSENT" || gate_rc=$?
+    case $gate_rc in
+    0 | 2) ;;
+    *)
+      echo "error: spawn refused for $ID: $FM_ROLE_PUB_DENIAL" >&2
+      echo "error: to let this home publish to ${FM_ROLE_PUB_TARGET:-that repository}, write 'maintainer ${FM_ROLE_PUB_TARGET:-<host>/<owner>/<repo>}' into $CONFIG/firstmate-role (docs/configuration.md \"Firstmate role\"), or pass --upstream-consent ${FM_ROLE_PUB_TARGET:-<host>/<owner>/<repo>} for this one task with the captain's explicit approval" >&2
+      exit 1
+      ;;
+    esac
   fi
   # The registry holds the captain's standing posture, so dropping below it is
   # allowed (a current explicit captain instruction wins) but never silent. An
@@ -5202,7 +5267,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp base_branch model effort account account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp base_branch upstream_consent model effort account account_provider busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -5220,6 +5285,7 @@ preserve_relaunch_meta() {
   [ -z "${BRANCH:-}" ] || echo "branch=$BRANCH"
   echo "tasktmp=$TASK_TMP"
   [ -z "$BASE_BRANCH" ] || echo "base_branch=$BASE_BRANCH"
+  [ -z "$UPSTREAM_CONSENT" ] || echo "upstream_consent=$UPSTREAM_CONSENT"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
   # The worker account pin, only when this home declares one, so an unpinned
@@ -5495,14 +5561,49 @@ if [ "$KIND" = secondmate ]; then
   # injected carrier and this on/off snapshot are guaranteed to agree.
   LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_HOME=$sq_home FM_TRACE_CONTEXT=$SPAWN_TRACE_EFFECTIVE FM_SUPERVISION_MODEL=$supervision_model $LAUNCH"
 fi
+# Implement the launch-delivery contract in this script's header. The full
+# home-identity hash isolates equal task ids across homes, and the spawn token in
+# the final filename keeps a buffered source line bound to this incarnation.
+spawn_launch_home_token() {
+  local home=$1 root hash
+  root=$(cd "$home" 2>/dev/null && pwd -P) || root=$home
+  if command -v shasum >/dev/null 2>&1; then
+    hash=$(printf '%s' "$root" | shasum -a 256 | awk '{print $1}')
+  elif command -v sha256sum >/dev/null 2>&1; then
+    hash=$(printf '%s' "$root" | sha256sum | awk '{print $1}')
+  else
+    return 1
+  fi
+  case "$hash" in
+    *[!0-9a-fA-F]*|'') return 1 ;;
+  esac
+  printf '%s' "$hash"
+}
+LAUNCH_HOME_TOKEN=$(spawn_launch_home_token "$FM_HOME") || LAUNCH_HOME_TOKEN=
+if [ -z "$LAUNCH_HOME_TOKEN" ]; then
+  echo "error: could not derive a home identity for the staged launch file" >&2
+  exit 1
+fi
+case "$SPAWN_GEN" in
+  *[!A-Za-z0-9.]*|'') echo "error: spawn incarnation token is not a usable launch-file nonce" >&2; exit 1 ;;
+esac
+LAUNCH_DIR="/tmp/fm-$ID+$LAUNCH_HOME_TOKEN"
 # Pane-scoped override: git in this worker reads our commit-msg strip without
 # rewriting the project's core.hooksPath. GIT_CONFIG_* takes precedence over
 # config files and is inherited by child git processes. When the home opts in
 # to keeping trailers, leave core.hooksPath alone so the repository's hooks run
 # directly. An export statement inside the pane command carries the override
 # across every step of a compound raw launch while firstmate's own git is unchanged.
+# The helper appends after the GIT_CONFIG_COUNT entries the worker actually
+# inherits (after any launch environment filtering), so credential.helper and
+# other inherited entries survive, and writes a plain export statement into the
+# private launch directory. The pane shell, fish included, only parses a simple
+# command, &&, || and that export list. A bad inherited count returns from the
+# sourced launch file before the worker runs, preserving the interactive pane
+# and its visible error for inspection.
 if [ "$KEEP_AI_TRAILERS" = 0 ]; then
-  LAUNCH="export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=$(shell_quote "$GIT_HOOKS_DIR"); $LAUNCH"
+  GIT_CONFIG_ENV_FILE=$(shell_quote "$LAUNCH_DIR/git-config.$SPAWN_GEN.sh")
+  LAUNCH="$(shell_quote "$FM_ROOT/bin/fm-git-strip-ai-trailers.sh") env-file $(shell_quote "$GIT_HOOKS_DIR") $GIT_CONFIG_ENV_FILE && . $GIT_CONFIG_ENV_FILE || return 1 2>/dev/null || exit 1; $LAUNCH"
 fi
 # Every agent this fleet launches - crewmate, scout, and secondmate, on a fresh
 # spawn and on a relaunch alike - runs with the compact-adviser kill switch on.
@@ -5635,33 +5736,6 @@ if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
   fi
   LAUNCH="$LAUNCH_ENV_PREFIX /bin/sh -c $(shell_quote "$LAUNCH")"
 fi
-# Implement the launch-delivery contract in this script's header. The full
-# home-identity hash isolates equal task ids across homes, and the spawn token in
-# the final filename keeps a buffered source line bound to this incarnation.
-spawn_launch_home_token() {
-  local home=$1 root hash
-  root=$(cd "$home" 2>/dev/null && pwd -P) || root=$home
-  if command -v shasum >/dev/null 2>&1; then
-    hash=$(printf '%s' "$root" | shasum -a 256 | awk '{print $1}')
-  elif command -v sha256sum >/dev/null 2>&1; then
-    hash=$(printf '%s' "$root" | sha256sum | awk '{print $1}')
-  else
-    return 1
-  fi
-  case "$hash" in
-    *[!0-9a-fA-F]*|'') return 1 ;;
-  esac
-  printf '%s' "$hash"
-}
-LAUNCH_HOME_TOKEN=$(spawn_launch_home_token "$FM_HOME") || LAUNCH_HOME_TOKEN=
-if [ -z "$LAUNCH_HOME_TOKEN" ]; then
-  echo "error: could not derive a home identity for the staged launch file" >&2
-  exit 1
-fi
-case "$SPAWN_GEN" in
-  *[!A-Za-z0-9.]*|'') echo "error: spawn incarnation token is not a usable launch-file nonce" >&2; exit 1 ;;
-esac
-LAUNCH_DIR="/tmp/fm-$ID+$LAUNCH_HOME_TOKEN"
 if ! (umask 077 && mkdir "$LAUNCH_DIR") 2>/dev/null; then
   if [ -L "$LAUNCH_DIR" ] || [ ! -d "$LAUNCH_DIR" ] || [ ! -O "$LAUNCH_DIR" ] ||
     [ -n "$(find "$LAUNCH_DIR" -prune \( -perm -g=w -o -perm -o=w \) -print 2>/dev/null)" ] ||
