@@ -1,0 +1,22 @@
+session:
+  file: /review.html
+  status: feedback
+prompts[2]:
+  - uid: ""
+    prompt: "Fix these 2 layout issues the browser detected in this artifact:\n1. [0000000000000001] Control outside the viewport - A required control sits 100px outside the bottom edge of the viewport and cannot be reached. Target: div > button. Viewport: Tablet / compact (840px). Status: Queued for fix.\n2. [0000000000000002] Overlapping text - Text overlaps a neighbouring element. Target: div:nth-of-type(2) > button. Viewport: Desktop (1368px). Status: Queued for fix."
+    selector: ""
+    tag: layout-warnings
+    text: "Layout issues: 2 selected"
+    target:
+      type: layout-warnings
+      warnings[2]{id,rule,selector,component,axis,overflow_px,viewport_class,viewport_width,status,last_seen_at}:
+        0000000000000001,viewport-unreachable-control,"div > button",button,vertical,100,compact,840,queued,"2026-01-01T00:00:00.000Z"
+        0000000000000002,overlapping-text,"div:nth-of-type(2) > button",button,horizontal,0,desktop,1368,queued,"2026-01-01T00:00:00.000Z"
+      artifact_revision: 2
+  - uid: ""
+    prompt: "Placeholder captain message, with a comma: first ask.\nSecond line with a \"quoted\" word.\n  - indented: text that looks like a field"
+    selector: ""
+    tag: message
+    text: Freeform message
+next_step: "Apply the requested changes to /review.html. This feedback includes layout issues the user selected from the Lavish Layout issues inbox (tag \"layout-warnings\")."
+dom_snapshot: "uid=3 body \"Placeholder board\""

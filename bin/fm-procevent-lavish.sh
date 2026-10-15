@@ -31,9 +31,13 @@
 #            is printed as its own field even when a selector is also present
 #            and even when that comment matches the element text, so typed
 #            words are never dropped. Choice Context data is not a comment.
+#            Layout warnings the captain queued (tag=layout-warnings) are their
+#            own labeled section and count, after the annotations, so they never
+#            displace a message. Both the tabular and the list result shapes are
+#            read, and every item in either is counted and presented.
 #            Captain-supplied body lines are visibly prefixed so they cannot
-#            forge structural labels. Empty message and annotation sections
-#            are reported explicitly.
+#            forge structural labels. Empty message, annotation, and layout
+#            warning sections are reported explicitly.
 # poll       The registered listener command `arm` publishes, not a command to
 #            run in a conversational turn. It runs the published blocking poll
 #            and prints its response verbatim, absorbing only the one exact
@@ -525,10 +529,11 @@ cmd_terminal() {
 }
 
 # Whether a completed result carries any queued content block at all. The
-# published response frames content as a top-level `prompts[N]{...}:` or
-# `feedback[N]{...}:` header whose rows are INDENTED, so this anchors on column
-# zero: an indented payload line is captain-supplied text and must never be able
-# to forge - or, here, to hide behind - a content header. Any recognized block
+# published response frames content as a top-level `prompts[N]{...}:`,
+# `feedback[N]{...}:`, or list-shaped `prompts[N]:` header whose rows are
+# INDENTED, so this anchors on column zero: an indented payload line is
+# captain-supplied text and must never be able to forge - or, here, to hide
+# behind - a content header. Any recognized block
 # is content regardless of its declared count, while a malformed top-level
 # prompts or feedback header makes the result indeterminate.
 #
@@ -537,7 +542,7 @@ cmd_terminal() {
 # failed" is never proof that nothing was said.
 result_has_queued_content() {  # <result-file>
   awk '
-    /^(prompts|feedback)\[[0-9]+\]\{[^}]*\}:[[:space:]]*$/ {
+    /^(prompts|feedback)\[[0-9]+\](\{[^}]*\})?:[[:space:]]*$/ {
       verdict = "present"
       exit
     }
@@ -573,12 +578,68 @@ cmd_silent() {
   [ "$content_rc" -eq 1 ]
 }
 
+# Lavish frames a round in one of two TOON shapes. When every queued item has
+# only primitive fields it is the tabular `prompts[N]{field,...}:` header with
+# CSV rows; when any item carries a nested value, such as the `target` block of
+# a layout-warnings item, the whole round becomes the list `prompts[N]:` header
+# with one `- key: value` item per entry. Readers must accept both, or a single
+# nested item hides every other item in the round, including captain messages.
+# This perl sub reads the list shape: given the lines after the header, it
+# returns each item's top-level primitive fields and the count of malformed
+# items. Nested blocks are skipped, never read as top-level fields.
+# shellcheck disable=SC2016 # Perl source; its sigils are not shell expansions.
+LAVISH_LIST_ITEMS_PERL='
+sub lavish_list_items {
+  my (@lines) = @_;
+  my (@items, $item, $bad, $dash, $field_indent);
+  my $malformed = 0;
+  my $finish = sub {
+    return unless defined $item;
+    if ($bad) { $malformed++ } else { push @items, $item }
+  };
+  for my $line (@lines) {
+    $line =~ s/\r?\n\z//;
+    if ($line =~ /^(\s*)- (.*)\z/s && (!defined $dash || length($1) == $dash)) {
+      $finish->();
+      ($dash, $item, $bad) = (length($1), {}, 0);
+      $field_indent = $dash + 2;
+      $line = (" " x $field_indent) . $2;
+    }
+    next unless defined $item;
+    $line =~ /^(\s*)/;
+    my $indent = length $1;
+    next if $indent > $field_indent;
+    if ($indent < $field_indent) { $bad = 1; next; }
+    my $rest = substr($line, $indent);
+    if ($rest =~ /^([A-Za-z_][A-Za-z0-9_.]*)(\[[^\]]*\](?:\{[^}]*\})?)?:\s*(.*)\z/s) {
+      my ($key, $array, $value) = ($1, $2, $3);
+      next if defined $array || $value eq "";
+      if ($value =~ /^"((?:[^"\\]|\\.)*)"\s*\z/s) {
+        $value = $1;
+        $value =~ s/\\(.)/$1 eq "n" ? "\n" : $1 eq "t" ? "\t" : $1 eq "r" ? "\r" : $1/ge;
+      } elsif ($value =~ /^"/) {
+        $bad = 1;
+        next;
+      } else {
+        $value =~ s/\s+\z//;
+      }
+      $item->{$key} = $value;
+    } else {
+      $bad = 1;
+    }
+  }
+  $finish->();
+  return (\@items, $malformed);
+}
+'
+
 # Print `key<TAB>answer<TAB>label[<TAB>mode]` for each non-reconcile structured choice the
 # captain submitted in a captured result; the optional mode column relays the
 # card's declared close mode (`done` or `release`) to the keyed-answer intake. The published response frames queued feedback as
 # a `prompts[N]{field,...}:` header followed by exactly N indented CSV rows whose
 # quoted fields carry JSON-style escapes, so this reads the declared field ORDER
-# rather than assuming a fixed column, and takes only rows whose `tag` field is
+# rather than assuming a fixed column; a list-shaped round is read through
+# lavish_list_items above. Either way it takes only rows whose `tag` field is
 # `choice`. A freeform `message` row is captain prose and is deliberately never a
 # source of decision keys. A row that does not carry both a slug-shaped `question`
 # and the versioned `selection` and `note` fields inside its `Context data:` block
@@ -592,25 +653,36 @@ cmd_choice_rows() {
   local selection=$1 file=${2-}
   [ -n "$file" ] || usage
   [ -f "$file" ] && [ ! -L "$file" ] || die "result file does not exist: $file"
-  perl -MJSON::PP -e '
+  perl -MJSON::PP -e "$LAVISH_LIST_ITEMS_PERL"'
     use strict; use warnings;
     my ($selection, $path) = @ARGV;
     open my $fh, "<", $path or exit 1;
-    my (@fields, $want, @rows);
+    my (@fields, $want, @rows, $list, @list_lines);
     while (my $line = <$fh>) {
-      if (!@fields) {
+      if (!@fields && !$list) {
+        if ($line =~ /^prompts\[(\d+)\]:\s*$/) {
+          ($want, $list) = ($1, 1);
+          next;
+        }
         next unless $line =~ /^prompts\[(\d+)\]\{([^}]*)\}:\s*$/;
         ($want, @fields) = ($1, split /,/, $2);
         next;
       }
       last unless $line =~ /^\s/;
+      if ($list) {
+        push @list_lines, $line;
+        next;
+      }
       last if @rows >= $want;
       chomp $line;
       push @rows, $line;
     }
     close $fh;
-    my %seen;
-    my @choices;
+    my @records;
+    if ($list) {
+      my ($items) = lavish_list_items(@list_lines);
+      @records = @$items;
+    }
     for my $row (@rows) {
       $row =~ s/^\s+//;
       my @vals;
@@ -627,6 +699,12 @@ cmd_choice_rows() {
       }
       my %f;
       $f{$fields[$_]} = $vals[$_] for 0 .. $#fields;
+      push @records, \%f;
+    }
+    my %seen;
+    my @choices;
+    for my $rec (@records) {
+      my %f = %$rec;
       next unless defined $f{tag} && $f{tag} eq "choice";
       my $prompt = $f{prompt};
       next unless defined $prompt && $prompt =~ /Context data:\s*(\{.*\})/s;
@@ -713,18 +791,26 @@ cmd_read() {
   [ -f "$file" ] && [ ! -L "$file" ] || die "result file does not exist: $file"
   lifecycle=$(cmd_classify "$file")
   session_ended=$(session_field "$file" session_ended)
-  perl -e '
+  perl -e "$LAVISH_LIST_ITEMS_PERL"'
     use strict; use warnings;
     my ($path, $lifecycle, $session_ended) = @ARGV;
     open my $fh, "<", $path or exit 1;
-    my (@fields, $want, @rows);
+    my (@fields, $want, @rows, $list, @list_lines);
     while (my $line = <$fh>) {
-      if (!@fields) {
+      if (!@fields && !$list) {
+        if ($line =~ /^(?:prompts|feedback)\[(\d+)\]:\s*$/) {
+          ($want, $list) = ($1, 1);
+          next;
+        }
         next unless $line =~ /^(?:prompts|feedback)\[(\d+)\]\{([^}]*)\}:\s*$/;
         ($want, @fields) = ($1, split /,/, $2);
         next;
       }
       last unless $line =~ /^\s/;
+      if ($list) {
+        push @list_lines, $line;
+        next;
+      }
       last if defined($want) && @rows >= $want;
       chomp $line;
       push @rows, $line;
@@ -733,6 +819,11 @@ cmd_read() {
     $want = 0 unless defined $want;
     my @parsed;
     my $malformed = 0;
+    if ($list) {
+      my ($items, $bad) = lavish_list_items(@list_lines);
+      @parsed = @$items;
+      $malformed = $bad;
+    }
     for my $row (@rows) {
       $row =~ s/^\s+//;
       my @vals;
@@ -767,10 +858,13 @@ cmd_read() {
     my $complete = ($presented == $want && !$malformed) ? "yes" : "no";
     my @messages;
     my @annotations;
+    my @warnings;
     for my $f (@parsed) {
       my $tag = defined $f->{tag} ? $f->{tag} : "";
       if ($tag eq "message") {
         push @messages, $f;
+      } elsif ($tag eq "layout-warnings") {
+        push @warnings, $f;
       } else {
         push @annotations, $f;
       }
@@ -810,6 +904,7 @@ cmd_read() {
     print "annotation_count: ", scalar(@annotations), "\n";
     my $message_count_key = $ended ? "session_ending_message_count" : "captain_message_count";
     print "$message_count_key: ", scalar(@messages), "\n";
+    print "layout_warning_count: ", scalar(@warnings), "\n";
     print "\n";
     if (@annotations) {
       print "ANNOTATIONS\n";
@@ -836,6 +931,21 @@ cmd_read() {
       print "END ANNOTATIONS\n";
     } else {
       print "ANNOTATIONS: (none)\n";
+    }
+    if (@warnings) {
+      print "LAYOUT WARNINGS\n";
+      my $n = 0;
+      for my $f (@warnings) {
+        $n++;
+        print "LAYOUT WARNING $n of ", scalar(@warnings), "\n";
+        print "text:\n";
+        emit_body($f->{text});
+        print "prompt:\n";
+        emit_body($f->{prompt});
+      }
+      print "END LAYOUT WARNINGS\n";
+    } else {
+      print "LAYOUT WARNINGS: (none)\n";
     }
     print "END LAVISH RESULT ($presented of $want)\n";
   ' "$file" "$lifecycle" "$session_ended"

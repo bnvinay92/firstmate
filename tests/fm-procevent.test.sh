@@ -3388,6 +3388,55 @@ assert_contains "$out" "SESSION-ENDING MESSAGE: (none)" \
 assert_contains "$out" "ANNOTATIONS: (none)" "an empty board close invented annotations"
 pass "read distinguishes a feedback capture from an ended-with-nothing close"
 
+# A round where one item carries a nested target - here the layout warnings the
+# captain queued - arrives in TOON's list shape (`prompts[N]:` with `- key: value`
+# items) instead of the tabular shape. The capture is a neutralized copy of a
+# real 0.1.80 round whose message was once read as zero items.
+LIST_ROUND="$ROOT/tests/captures/lavish-axi-0.1.80/layout-warnings-with-message.toon"
+out=$("$ROOT/bin/fm-procevent-lavish.sh" read "$LIST_ROUND") || fail "read failed on a list-shaped round"
+assert_contains "$out" $'CAPTAIN MESSAGE\n| Placeholder captain message, with a comma: first ask.\n| Second line with a "quoted" word.\n|   - indented: text that looks like a field\nEND CAPTAIN MESSAGE' \
+  "a captain message beside layout warnings was dropped or altered"
+assert_contains "$out" "declared_items: 2" "a list-shaped round lost its declared count"
+assert_contains "$out" "presented_items: 2" "a list-shaped round did not present every item"
+assert_contains "$out" "malformed_items: 0" "a well-formed list-shaped round reported malformed items"
+assert_contains "$out" "complete: yes" "a complete list-shaped round was not marked complete"
+assert_contains "$out" "captain_message_count: 1" "the message in a list-shaped round was not counted"
+assert_contains "$out" "layout_warning_count: 1" "the layout warnings were not counted"
+assert_contains "$out" "annotation_count: 0" "layout warnings were counted as element annotations"
+assert_contains "$out" $'LAYOUT WARNINGS\nLAYOUT WARNING 1 of 1\ntext:\n| Layout issues: 2 selected\nprompt:\n| Fix these 2 layout issues' \
+  "the layout warnings were not presented as their own labeled section"
+assert_contains "$out" "| 2. [0000000000000002] Overlapping text" "a queued layout warning was dropped"
+assert_not_contains "$out" "type: layout-warnings" "a nested target field leaked as a top-level item field"
+assert_not_contains "$out" "Apply the requested changes" "a field after the round leaked into an item"
+pass "read presents every item of a list-shaped round, and layout warnings never hide a captain message"
+
+# The keyed-answer intake must read the same list shape, or a choice submitted
+# beside a nested item is silently lost.
+cat > "$READ" <<'EOF'
+session:
+  file: /review.html
+  status: feedback
+prompts[2]:
+  - uid: ""
+    prompt: "Fix these 1 layout issues"
+    selector: ""
+    tag: layout-warnings
+    text: "Layout issues: 1 selected"
+    target:
+      type: layout-warnings
+  - uid: el-choice
+    prompt: "Context data: {\"schema\":\"fm-bearings-answer.v1\",\"question\":\"sample-call\",\"selection\":\"option-a\",\"note\":\"\"}"
+    selector: "section#call > button"
+    tag: choice
+    text: Option A
+EOF
+answers=$("$ROOT/bin/fm-procevent-lavish.sh" answers "$READ") || fail "answers failed on a list-shaped round"
+[ "$answers" = $'sample-call\toption-a\tOption A' ] \
+  || fail "answers dropped or altered a choice in a list-shaped round: $answers"
+printf 'session:\n  file: /a.html\n  status: ended\n  ended_by: user\nprompts[1]:\n  - tag: choice\n' > "$SIL"
+silent_says no "an ended session carrying a list-shaped content block is never assumed empty"
+pass "answers and silence read a list-shaped round like a tabular one"
+
 # The runner's silence seam is generic and closed by default: an adapter with no
 # `silent` command must keep announcing, so adding the seam changed nothing for
 # every adapter that has no notion of a no-op.
