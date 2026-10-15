@@ -197,6 +197,21 @@ test_secondmate_plans_route_into_one_review_and_back() {
   [ "$(jq -r '.homes[0].items[0].id' "$primary/state/stow-review.json")" = mate-a.k1 ] \
     || fail "the routed item does not carry its home in its id"
 
+  # Naming only main, or no home at all, gathers this home alone.
+  for homes in main ''; do
+    out=$(run_plan "$primary" collect --homes "$homes") || fail "collect --homes '$homes' failed: $out"
+    assert_contains "$out" 'home=main items=0' "collect --homes '$homes' did not gather main"
+    assert_not_contains "$out" 'mate-' "collect --homes '$homes' gathered a secondmate"
+  done
+  out=$(run_plan "$primary" collect --homes main,mate-a) || fail "collect of main and one home failed: $out"
+  assert_contains "$out" 'home=mate-a items=1' "naming main hid an asked secondmate"
+  set +e
+  out=$(run_plan "$primary" collect --homes main,mate-z 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "an unknown secondmate name was accepted"
+  assert_contains "$out" 'not a registered secondmate: mate-z' "the unknown name was not refused"
+
   # A home asked but with no plan is an exception, and the rest still review.
   set +e
   out=$(run_plan "$primary" collect)
