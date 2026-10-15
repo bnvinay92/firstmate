@@ -33,7 +33,6 @@ const BACKGROUND = 'composerSidebarBackground'
 
 const EMPTY: FleetView = { prs: [], decisions: [], at: null, problem: null }
 
-const site = atom({ plugin: 'fleet-pane', key: 'site' } as const, null)
 const view = atom({ plugin: 'fleet-pane', key: 'view' } as const, EMPTY)
 
 async function exists($: Engine, path: string): Promise<boolean> {
@@ -58,6 +57,11 @@ async function detectSite($: Engine): Promise<PaneSite | null> {
   return null
 }
 
+// The home this process runs in, kept by the module rather than in $.state: a
+// /clear goes on under a new session whose $.state starts empty and raises no
+// session.start, while the module and its timers run on.
+let site: PaneSite | null = null
+
 // What GitHub last said, kept by the module so a render never asks it; a hot
 // reload starts it over, which costs one early read.
 let asked: { urls: string; at: number } | null = null
@@ -76,9 +80,8 @@ async function askGithub($: Engine, refs: PrRef[], now: number): Promise<string 
 // Reread the snapshot and, when due, GitHub, then redraw. One read at a time;
 // a failed read keeps the last good rows and says what failed.
 async function refresh($: Engine): Promise<void> {
-  if (isReading) return
-  const where = await read($, site)
-  if (where === null) return
+  const where = site
+  if (isReading || where === null) return
   isReading = true
   try {
     const ran = await $.process.run([`${where.root}/${SNAPSHOT_SCRIPT}`, '--json'], {
@@ -113,14 +116,24 @@ async function openPane($: Engine, isAsked: boolean): Promise<void> {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    const where = await detectSite($)
-    await update($, site, () => where)
-    if (where !== null) {
+    site = await detectSite($)
+    if (site !== null) {
       await $.command.register({ name: 'fleet-pane', description: 'Show open pull requests and decisions waiting on you' })
       if ((await $.store.get('isHidden')) !== true) void openPane($, false)
       $.clock.every(REFRESH_MS, () => {
         void refresh($)
       })
+      $.clock.after(10, () => {
+        void refresh($)
+      })
+    }
+    return next(e)
+  })
+
+  // A /clear leaves the new session's view empty: read again at once rather
+  // than at the next minute.
+  on('session.end', async ($, e, next) => {
+    if (e.reason === 'clear' && site !== null) {
       $.clock.after(10, () => {
         void refresh($)
       })
@@ -141,6 +154,7 @@ export const register: Register = on => {
 
   on('command.run', { command: 'fleet-pane' }, async $ => {
     await $.store.set('isHidden', false)
+    site = (await detectSite($)) ?? site
     await openPane($, true)
     $.clock.after(10, () => {
       void refresh($)

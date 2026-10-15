@@ -36,7 +36,6 @@ export type FleetView = {
 declare module 'claude-code' {
   interface PluginState {
     'fleet-pane': {
-      site: PaneSite | null
       view: FleetView
     }
   }
