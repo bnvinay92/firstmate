@@ -11,6 +11,7 @@ import {
   prQuery,
   prRow,
   reportIn,
+  wrapSpans,
 } from '../hooks/lib'
 import type { PrRef, PrStatus } from '../hooks/lib'
 
@@ -198,5 +199,22 @@ describe('what blocks a pull request', () => {
       checks: 'status unknown',
       blockers: ['GitHub did not answer'],
     })
+  })
+})
+
+describe('wrapping a line to the pane', () => {
+  const lines = (text: string, first: number, rest: number) => wrapSpans(text, first, rest).map(([a, b]) => text.slice(a, b))
+
+  test('breaks at spaces, each line within its width', () => {
+    expect(lines('checks passing - needs an approving review', 20, 18)).toEqual(['checks passing -', 'needs an approving', 'review'])
+  })
+
+  test('splits a word longer than a line rather than cutting it off', () => {
+    expect(lines('https://github.com/a/b/pull/7', 12, 10)).toEqual(['https://gith', 'ub.com/a/b', '/pull/7'])
+  })
+
+  test('a short or empty line stays one line', () => {
+    expect(lines('None.', 40, 38)).toEqual(['None.'])
+    expect(lines('', 40, 38)).toEqual([''])
   })
 })

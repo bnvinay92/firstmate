@@ -14,6 +14,7 @@ import {
   parseSnapshot,
   prQuery,
   prRow,
+  wrapSpans,
 } from './lib'
 import type { PrRef, PrStatus } from './lib'
 
@@ -30,6 +31,12 @@ const LINK = 'suggestion'
 const WAIT = 'warning'
 const READY = 'success'
 const BACKGROUND = 'composerSidebarBackground'
+
+// A run of one line's text in one style.
+type Run = { text: string; color: string; bold?: boolean }
+
+// The pane's width when a surface hands none, as at its narrowest seat.
+const FALLBACK_COLUMNS = 40
 
 const EMPTY: FleetView = { prs: [], decisions: [], at: null, problem: null }
 
@@ -163,73 +170,65 @@ export const register: Register = on => {
         {children}
       </Box>
     )
+    // One row's runs wrapped to the pane's width, each continuation indented
+    // two cells under its row, so no line runs past the right edge.
+    const width = e.props.bodyColumns > 0 ? e.props.bodyColumns : FALLBACK_COLUMNS
+    const row = (key: string, indent: number, runs: Run[]) => {
+      const text = runs.map(run => run.text).join('')
+      return wrapSpans(text, width - indent, width - indent - 2).map(([from, to], line) => {
+        let at = 0
+        const parts = runs.flatMap((run, i) => {
+          const start = Math.max(from, at)
+          const end = Math.min(to, at + run.text.length)
+          at += run.text.length
+          return end > start ? [<Text key={i} color={run.color} bold={run.bold}>{text.slice(start, end)}</Text>] : []
+        })
+        return (
+          <Text key={`${key}:${line}`} color={TEXT} wrap="truncate-end">
+            {' '.repeat(line === 0 ? indent : indent + 2)}
+            {parts}
+          </Text>
+        )
+      })
+    }
     if (shown.at === null) {
-      return pane(
-        <Text key="wait" color={TEXT}>
-          {shown.problem ?? 'Reading pull requests and decisions...'}
-        </Text>,
-      )
+      return pane(row('wait', 0, [{ text: shown.problem ?? 'Reading pull requests and decisions...', color: TEXT }]))
     }
     return pane(
-      <Text key="prs" bold color={TEXT}>
-        Open pull requests ({shown.prs.length})
-      </Text>,
-      shown.prs.length === 0 ? (
-        <Text key="no-prs" color={TEXT}>
-          {'  '}None open.
-        </Text>
-      ) : (
-        shown.prs.map(pr => (
-          <Box key={`pr:${pr.url}`} flexDirection="column">
-            <Text color={TEXT} wrap="truncate-end">
-              {'  '}
-              {pr.project}: {pr.title}
-            </Text>
-            <Text color={LINK} wrap="truncate-end">
-              {'    '}
-              {pr.url}
-            </Text>
-            <Text color={TEXT} wrap="truncate-end">
-              {'    '}checks {pr.checks} -{' '}
-              <Text color={pr.blockers[0]?.startsWith('ready') === true ? READY : WAIT}>{pr.blockers.join('; ')}</Text>
-            </Text>
-          </Box>
-        ))
-      ),
+      row('prs', 0, [{ text: `Open pull requests (${shown.prs.length})`, color: TEXT, bold: true }]),
+      shown.prs.length === 0
+        ? row('no-prs', 2, [{ text: 'None open.', color: TEXT }])
+        : shown.prs.map(pr => (
+            <Box key={`pr:${pr.url}`} flexDirection="column">
+              {row('title', 2, [{ text: `${pr.project}: ${pr.title}`, color: TEXT }])}
+              {row('url', 4, [{ text: pr.url, color: LINK }])}
+              {row('checks', 4, [
+                { text: `checks ${pr.checks} - `, color: TEXT },
+                { text: pr.blockers.join('; '), color: pr.blockers[0]?.startsWith('ready') === true ? READY : WAIT },
+              ])}
+            </Box>
+          )),
       <Text key="gap" color={TEXT}>
         {' '}
       </Text>,
-      <Text key="decisions" bold color={TEXT}>
-        Decisions waiting for you ({shown.decisions.length})
-      </Text>,
-      shown.decisions.length === 0 ? (
-        <Text key="no-decisions" color={TEXT}>
-          {'  '}None.
-        </Text>
-      ) : (
-        shown.decisions.map((one, i) => (
-          <Box key={`decision:${i}:${one.label}`} flexDirection="column">
-            <Text color={TEXT} wrap="truncate-end">
-              {'  '}
-              <Text bold color={TEXT}>
-                {one.label}
-              </Text>
-              : {one.summary}
-            </Text>
-            {one.report !== null && (
-              <Text color={LINK} wrap="truncate-end">
-                {'    '}report {one.report}
-              </Text>
-            )}
-          </Box>
-        ))
-      ),
+      row('decisions', 0, [{ text: `Decisions waiting for you (${shown.decisions.length})`, color: TEXT, bold: true }]),
+      shown.decisions.length === 0
+        ? row('no-decisions', 2, [{ text: 'None.', color: TEXT }])
+        : shown.decisions.map((one, i) => (
+            <Box key={`decision:${i}:${one.label}`} flexDirection="column">
+              {row('decision', 2, [
+                { text: one.label, color: TEXT, bold: true },
+                { text: `: ${one.summary}`, color: TEXT },
+              ])}
+              {one.report !== null && row('report', 4, [{ text: `report ${one.report}`, color: LINK }])}
+            </Box>
+          )),
       <Text key="gap2" color={TEXT}>
         {' '}
       </Text>,
-      <Text key="at" color={TEXT}>
-        Updated {clock(shown.at)}, every minute and after each reply.{shown.problem === null ? '' : ` ${shown.problem}`}
-      </Text>,
+      row('at', 0, [
+        { text: `Updated ${clock(shown.at)}, every minute and after each reply.${shown.problem === null ? '' : ` ${shown.problem}`}`, color: TEXT },
+      ]),
     )
   })
 }

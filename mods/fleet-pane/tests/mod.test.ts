@@ -196,3 +196,24 @@ describe('the pane under any theme', () => {
     }
   })
 })
+
+describe('the pane at a narrow width', () => {
+  test('wraps every line within the pane, keeping each URL and blocker whole, and rewraps when resized', async ($, on) => {
+    const w = world(on)
+    await start($, w)
+    const pane = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns: 70 } })
+    for (const columns of [70, 34]) {
+      await pane.redraw({ ...PANE.props, bodyColumns: columns })
+      const lines = (await pane.findAll({ type: 'Text' })).filter(text => text.props.wrap === 'truncate-end').map(text => text.text)
+      expect(lines.length).toBeGreaterThan(10)
+      for (const line of lines) expect({ line, isWithin: line.length <= columns }).toEqual({ line, isWithin: true })
+      const all = lines.map(line => line.trim()).join(' ')
+      const joined = lines.map(line => line.trim()).join('')
+      expect(joined.includes(AXI) && joined.includes(KSM)).toBe(true)
+      expect(all).toContain('checks 1 failing - a failing check; needs an approving review')
+      expect(all).toContain('inspector-lavish-ship: Ship the Lavish review page?')
+      expect(all).toContain('report data/s6-codex-cp1/report.md')
+    }
+    await pane.unmount()
+  })
+})
