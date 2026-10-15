@@ -55,6 +55,7 @@ declare module 'claude-code' {
       review: StowReview | null
       ticks: Record<string, boolean>
       edits: Record<string, string>
+      editing: string | null
       page: number
       round: StowRound | null
       isAuto: boolean

@@ -157,24 +157,29 @@ export function countItems(review: StowReview): number {
   return review.homes.reduce((sum, plan) => sum + plan.items.length, 0)
 }
 
-// Columns an item row spends before its entry: the indent, the tick, the
-// action, the gaps between them and the field's own `keep` label.
-const ROW_LEAD = 18
-// The indent of an entry's full text, drawn beneath its row.
-export const ENTRY_INDENT = '      '
+// An item's body sits under its tick, this many columns in, so a wrapped
+// line stays clear of the tick column rather than running to the pane's edge.
+export const BODY_INDENT = 9
 
-// Whether an entry needs its full text drawn beneath its row: it holds a
-// line break, or it is wider than the field beside the tick, which cuts it.
-export function isEntryCut(entry: string, action: string, columns: number): boolean {
-  return entry.includes('\n') || entry.length > columns - ROW_LEAD - action.length
-}
+// The label a rewrite's replaced text is drawn under.
+export const REPLACES_LABEL = 'replaces: '
 
-// Screen rows an item takes at `columns`: its own, plus its full text
-// wrapped beneath it when the field would cut it.
-export function itemHeight(item: StowItem, columns: number, entry = item.entry): number {
-  if (!isEntryCut(entry, item.action, columns)) return 1
-  const width = Math.max(1, columns - ENTRY_INDENT.length)
-  return 1 + entry.split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / width)), 0)
+const wrappedRows = (text: string, width: number): number =>
+  text.split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / width)), 0)
+
+// Whether an item's drawn body shows what it replaces: only a rewrite does,
+// because a removal's replaced text is its entry.
+export const showsReplaces = (item: StowItem): boolean =>
+  item.action === 'rewrite' && item.replaces !== undefined && item.replaces !== ''
+
+// Screen rows an item takes at `columns`: its tick and action row, its entry
+// wrapped beneath (or the one-line field while it is being edited), what a
+// rewrite replaces, and the blank row that separates it from the next item.
+export function itemHeight(item: StowItem, columns: number, entry = item.entry, isEditing = false): number {
+  const width = Math.max(1, columns - BODY_INDENT)
+  const body = isEditing ? 1 : wrappedRows(entry, width)
+  const replaced = showsReplaces(item) ? wrappedRows(REPLACES_LABEL + (item.replaces ?? ''), width) : 0
+  return 1 + body + replaced + 1
 }
 
 // Pages of at most `room` screen rows, an item counting `heightOf` rows; a

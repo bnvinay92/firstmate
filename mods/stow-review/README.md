@@ -6,11 +6,14 @@ The internal [`stow` skill](../../.agents/skills/stow/SKILL.md) owns the stow pr
 ## What it does
 
 In the main Firstmate session, a band above the prompt appears whenever any current home holds at least the threshold (200,000 tokens by default): the main session itself, or a live local secondmate.
-It names each home over the threshold with its context size.
+It shows one **Stow** button for each home over the threshold, named for that home with its context size, such as `Stow main (250k)`.
 
-- **Stow** asks exactly the homes over the threshold to draft a plan: the main session drafts its own, and each listed secondmate drafts in its own home and replies with a pointer, or says its plan is empty.
-- The review pane then shows every drafted plan together, grouped by home, then stow section, then target file.
-  Every item starts ticked; untick what should not be saved, and edit an entry's line to change its wording.
+- Pressing a home's button asks that home alone to draft a plan, and only that home is cleared afterwards: the main session drafts its own, and a secondmate drafts in its own home and replies with a pointer, or says its plan is empty.
+  Other homes over the threshold are left alone until their own button is pressed, after the current round ends.
+- The review pane then shows the drafted plan, grouped by home, then stow section, then target file.
+  Each item shows its action spelled out (add, rewrite, remove, archive, or record) beside its tick, then its entry once in full, and for a rewrite the text it replaces, labelled `replaces:`.
+  Every item starts ticked; untick what should not be saved, and press an item's **Edit** to change its wording in a field that stands in for the entry until Enter or **Done**.
+  A removal has no Edit, because its text never changes.
   **Save** hands the approved plan back, and each home writes only its own approved items.
   **Cancel** writes nothing.
 - **Auto** (off by default, remembered across sessions) stows a home on its own once it crosses the threshold, and saves everything the plans suggest with no review.
