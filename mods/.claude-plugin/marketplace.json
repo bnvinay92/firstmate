@@ -2,5 +2,8 @@
   "name": "firstmate-mods",
   "owner": { "name": "Firstmate contributors" },
   "description": "Claude Code mods for Firstmate homes.",
-  "plugins": [{ "name": "stow-review", "source": "./stow-review" }]
+  "plugins": [
+    { "name": "stow-review", "source": "./stow-review" },
+    { "name": "fleet-pane", "source": "./fleet-pane" }
+  ]
 }
