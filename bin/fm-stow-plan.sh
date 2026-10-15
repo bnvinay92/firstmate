@@ -47,7 +47,8 @@
 # draft its plan and reply with a pointer, or that its plan is empty. In a
 # primary home, collect merges this home's draft (home "main") with each
 # registered secondmate's draft into state/stow-review.json, or with only the
-# secondmates --homes names (the homes that replied with a plan this round):
+# secondmates --homes names (the homes that replied with a plan this round;
+# main in that list, or an empty list, collects only this home):
 #   {"version":1,"homes":[{"home":..,"items":[..]}..],"exceptions":[{"home":..,"reason":..}..]}
 # A local secondmate's draft is read from its home; a remote one through
 # fm-on.sh and fm-remote-file.sh get, bounded by FM_STOW_PLAN_TIMEOUT seconds
@@ -265,6 +266,11 @@ cmd_collect() {
     --homes) [ "$#" -eq 2 ] || usage_error; only=",$2,"; only_set=1 ;;
     *) usage_error ;;
   esac
+  # main is always collected, so naming it (or nothing) asks for no secondmate.
+  while :; do
+    case "$only" in *,main,*) only=${only/,main,/,} ;; *) break ;; esac
+  done
+  [ "$only" != ,, ] || only=,
   is_secondmate_home && die "collect runs in a primary home; a secondmate drafts its own plan only"
   check_plan_file "$PLAN" main || return 1
   local review="$TMP/review.json" exceptions=0 line id home remote out
