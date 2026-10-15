@@ -21,9 +21,9 @@ A failed script's duration is excluded even when its lane uploaded an artifact.
 Collect successful per-script measurements for every member before calculating a split.
 
 The supervision host suite ran as one script in those runs, taking 866648 to 1681606 ms, and is now four: `tests/fm-supervision-host.test.sh` and its engine, latch, and park siblings.
-Each of their hints is the slowest sum, across ten green samples of the pre-split script, of the per-case durations between consecutive `ok` lines in the job log for the cases that script now holds.
-The samples are the serial job logs of the eight runs above plus [37744757195](https://github.com/bnvinay92/firstmate/actions/runs/37744757195) and [38437964391](https://github.com/bnvinay92/firstmate/actions/runs/38437964391).
-Replace these derived values with the split scripts' own measured maxima once several green runs have uploaded them.
+Its cases also left their watchers and hosts running until the script exited, so later cases ran under the load of every earlier one; each case now stops them as it ends.
+The four hints are the slowest samples from the split layout's first two runs, [38732920097](https://github.com/bnvinay92/firstmate/actions/runs/38732920097) (split only) and [38738672306](https://github.com/bnvinay92/firstmate/actions/runs/38738672306) (with the per-case cleanup); the main suite's 279587 ms comes from the second alone, because the first preceded the cleanup.
+Further green runs must establish their variance.
 
 ## Parallel lanes
 

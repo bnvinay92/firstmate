@@ -649,7 +649,7 @@ list_portable_serial() {
 # Measured portable-serial script durations in milliseconds, from the CI timing
 # artifacts recorded in docs/fm-test-portable-shards.md. Each value is the
 # slowest successful sample in the referenced complete/partial CI runs, with
-# the split supervision host suites' derived values documented there.
+# the split supervision host suites' later samples documented there.
 # These are balance hints only: the shard
 # partition stays complete and disjoint whatever they say, so a stale hint costs
 # balance rather than coverage. That doc owns the refresh procedure.
@@ -795,11 +795,11 @@ tests/fm-stow-plan.test.sh 1398
 tests/fm-subagent-pretool-check.test.sh 1361
 tests/fm-supervision-events.test.sh 664
 tests/fm-supervision-host-attended-live-e2e.test.sh 56
-tests/fm-supervision-host-engine.test.sh 320804
-tests/fm-supervision-host-latch.test.sh 406160
+tests/fm-supervision-host-engine.test.sh 86832
+tests/fm-supervision-host-latch.test.sh 78491
 tests/fm-supervision-host-live-e2e.test.sh 54
-tests/fm-supervision-host-park.test.sh 346661
-tests/fm-supervision-host.test.sh 596917
+tests/fm-supervision-host-park.test.sh 56095
+tests/fm-supervision-host.test.sh 279587
 tests/fm-tangle-guard.test.sh 8629
 tests/fm-task-delivery.test.sh 37274
 tests/fm-task-inbox.test.sh 67909
