@@ -5,7 +5,6 @@ import {
   approvedReview,
   crossings,
   draftArgs,
-  isEntryCut,
   itemHeight,
   pageOf,
   parseReading,
@@ -59,15 +58,19 @@ describe('the review layout', () => {
     expect(pageOf(reviewRows(REVIEW), 100, 0).pages).toBe(1)
   })
 
-  test('a long entry counts every row its wrapped full text takes', async () => {
+  test('an item counts its action row, its wrapped entry, what a rewrite replaces, and a gap', async () => {
     const short: StowItem = { id: 's', section: 'memory', action: 'add', target: 't', entry: '- short' }
     const long: StowItem = { ...short, id: 'l', entry: `- ${'word '.repeat(60)}` }
-    expect(isEntryCut(short.entry, short.action, 80)).toBe(false)
-    expect(isEntryCut(long.entry, long.action, 80)).toBe(true)
-    expect(isEntryCut('- one\n- two', 'add', 80)).toBe(true)
-    expect(itemHeight(short, 80)).toBe(1)
-    // Its row, then 302 characters wrapped at 74 columns.
-    expect(itemHeight(long, 80)).toBe(1 + 5)
+    const rewrite: StowItem = { ...short, id: 'r', action: 'rewrite', replaces: '- old' }
+    const removal: StowItem = { ...short, id: 'x', action: 'remove', replaces: '- short' }
+    expect(itemHeight(short, 80)).toBe(3)
+    expect(itemHeight({ ...short, entry: '- one\n- two' }, 80)).toBe(4)
+    // 302 characters wrapped at 71 columns.
+    expect(itemHeight(long, 80)).toBe(1 + 5 + 1)
+    // While edited, the one-line field stands in for the wrapped entry.
+    expect(itemHeight(long, 80, long.entry, true)).toBe(3)
+    expect(itemHeight(rewrite, 80)).toBe(4)
+    expect(itemHeight(removal, 80)).toBe(3)
     const tall: StowReview = { version: 1, homes: [{ home: 'main', items: [long, short] }] }
     const heightOf = (row: ReturnType<typeof reviewRows>[number]) => (row.kind === 'item' ? itemHeight(row.item, 80) : 1)
     expect(pageOf(reviewRows(tall), 9, 0).pages).toBe(1)

@@ -73,25 +73,55 @@ Auto stow saved: mate-a 1 item.
 ❯ /clear
 ```
 
+The single Stow button seen here has since become one button per home, checked below.
 The band named only the home over the threshold, Auto started a round for exactly that home, writing a round-end record with `"clear":true` produced the notice and then the clear, and the band came back on the next poll after the clear without a reload.
 `/stow-review` then showed the kept `Last automatic stow: mate-a 1 item` with its items grouped by home, section, and target.
-A reviewed round opened the pane once the review file appeared, drawn as:
+### One button per home, and the review pane
+
+This check ran on 2026-10-15 with Claude Code 2.1.300, loading this repository's `mods/stow-review` with `--plugin-dir` into an interactive session on a private tmux socket, in a dark terminal theme.
+The scratch home's `data/secondmates.md` named two local secondmates, `mate-a` and `mate-b`, with fresh readings of 250,000 and 230,000 tokens, and the same stand-in `/stow` command.
+
+Observed in the terminal, after pressing only `mate-b`'s button:
 
 ```text
-3 of 3 items ticked. Untick what should not be saved; edit a line to change its wording.
-Home: main
+Context over 200k: [ Stow mate-a (250k) ] [ Stow mate-b (230k) ] [ Auto: off ]
+❯ /stow draft --mod --homes mate-b
+Stow under way for mate-b [ Auto: off ]
+```
+
+The band offered one button per home over the threshold, and the round asked only the home pressed.
+A review file written for that round opened the pane on the next poll, drawn as:
+
+```text
+4 of 4 items ticked. Untick what should not be saved; Edit changes an entry's wording.
+Home: mate-b
   Startup-memory tiers
     data/learnings.md
-      [x] rewrite - fact <!--a:2026-10-14-->
+     [x] rewrite [ Edit ]
+         - Booking explore runs its own release train; rebase onto release/2026.10 before opening a PR
+         <!--a:2026-10-15-->
+         replaces: - Booking explore rebases onto main before a PR <!--a:2026-08-01-->
+
+     [x] remove
+         - The flaky checkout test is quarantined <!--a:2026-07-02-->
+
   Knowledge routing
     data/captain.md
-      [x] add - likes short PRs
-Home: mate-a
+     [x] add [ Edit ]
+         - Prefers one small PR per behaviour change, with the screenshot of the changed screen in the PR
+         description and no drive-by refactors
+
   Open-record persistence
     backlog
-      [x] record file: flaky test follow-up
+     [x] record [ Edit ]
+         file: flaky test follow-up
+
 [ All ] [ None ] [ Auto: off ] [ Save ] [ Cancel ]
 ```
+
+Every line of the pane body was drawn in the theme's text colour (256-colour 231) over the pane background (235), with no dim attribute.
+Pressing an item's Edit replaced its text with a one-line `New wording:` field and turned the button into Done; Enter put the edited wording back as wrapped text.
+The field's own text is drawn by the engine in the terminal's default foreground, which the mod cannot colour.
 
 Toggling, editing, Save, and Cancel are covered by `claude plugin test mods/stow-review`, which drives the same pane through the engine's test kit on the terminal and desktop surfaces.
 A `--plugin-dir` load keeps its own store, separate from an installed copy's, so a test session's Auto setting never reaches an installed mod.

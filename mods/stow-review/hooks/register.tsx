@@ -5,10 +5,11 @@ import type { StowApplied, StowItem, StowReading, StowReview, StowRound, StowSit
 import {
   APPLIED_FILE,
   APPROVED_FILE,
+  BODY_INDENT,
   CONTEXT_FILE,
-  ENTRY_INDENT,
   REFRESH_MS,
   REGISTRY_FILE,
+  REPLACES_LABEL,
   REVIEW_FILE,
   ROUND_TIMEOUT_MS,
   SECONDMATE_MARKER,
@@ -20,7 +21,6 @@ import {
   crossings,
   draftArgs,
   formatTokens,
-  isEntryCut,
   isOver,
   itemHeight,
   keyOf,
@@ -30,6 +30,7 @@ import {
   parseRegistry,
   parseReview,
   reviewRows,
+  showsReplaces,
 } from './lib'
 import type { ReviewRow } from './lib'
 
@@ -42,8 +43,8 @@ const PUBLISH_MIN_MS = 30 * 1000
 // The pane's colours, every one a theme key so it follows the theme in force:
 // a run left uncoloured takes the terminal's default foreground instead,
 // which a dark theme in a light terminal draws dark on the pane's dark grey.
+// Nothing is drawn in the theme's dim grey, which reads poorly on a dark pane.
 const TEXT = 'text'
-const MUTED = 'inactive'
 const PRIMARY = 'suggestion'
 const BACKGROUND = 'composerSidebarBackground'
 
@@ -52,6 +53,7 @@ const readings = atom({ plugin: 'stow-review', key: 'readings' } as const, [])
 const review = atom({ plugin: 'stow-review', key: 'review' } as const, null)
 const ticks = atom({ plugin: 'stow-review', key: 'ticks' } as const, {})
 const edits = atom({ plugin: 'stow-review', key: 'edits' } as const, {})
+const editing = atom({ plugin: 'stow-review', key: 'editing' } as const, null)
 const page = atom({ plugin: 'stow-review', key: 'page' } as const, 0)
 const round = atom({ plugin: 'stow-review', key: 'round' } as const, null)
 const isAuto = atom({ plugin: 'stow-review', key: 'isAuto' } as const, false)
@@ -160,6 +162,7 @@ async function followRound($: Engine, where: StowSite): Promise<void> {
   await update($, review, () => loaded)
   await update($, ticks, () => ({}))
   await update($, edits, () => ({}))
+  await update($, editing, () => null)
   await update($, page, () => 0)
   await update($, round, r => (r === null ? r : { ...r, isReviewOpen: true }))
   await $.ui.open({ id: PANE, title: 'Stow review', focus: true })
@@ -235,6 +238,11 @@ async function toggleItem($: Engine, key: string): Promise<void> {
 
 async function editItem($: Engine, key: string, value: string): Promise<void> {
   await update($, edits, map => ({ ...map, [key]: value }))
+}
+
+// One entry is edited at a time, in a field that takes the place of its text.
+async function toggleEditing($: Engine, key: string): Promise<void> {
+  await update($, editing, current => (current === key ? null : key))
 }
 
 async function tickAll($: Engine, review: StowReview, value: boolean): Promise<void> {
@@ -317,22 +325,23 @@ export const register: Register = (on, options) => {
     if (over.length === 0 && current === null) return next(e)
     const auto = await read($, isAuto)
     const { Box, Button, Text } = $.ui.resolve(e)
-    const homes = over.map(one => one.home)
-    const names = over.map(one => `${one.home} ${formatTokens(one.tokens)}`).join(', ')
+    // One button per home over the threshold, so a round drafts and clears
+    // only the home the captain pressed.
     return (
       <Box flexDirection="row" gap={1}>
         {current === null ? (
-          <Text key="what">Context over {formatTokens(threshold)}: {names}</Text>
+          <Text key="what">Context over {formatTokens(threshold)}:</Text>
         ) : (
           <Text key="what">
             Stow {current.isAuto ? '(auto) ' : ''}under way for {current.homes.join(', ')}
           </Text>
         )}
-        {current === null && (
-          <Button key="stow" variant="primary" onPress={() => startRound($, homes, false)}>
-            Stow
-          </Button>
-        )}
+        {current === null &&
+          over.map(one => (
+            <Button key={`stow:${one.home}`} variant="primary" onPress={() => startRound($, [one.home], false)}>
+              Stow {one.home} ({formatTokens(one.tokens)})
+            </Button>
+          ))}
         {current?.isReviewOpen === true && (
           <Button key="review" onPress={() => openPane($)}>
             Review
@@ -383,18 +392,26 @@ export const register: Register = (on, options) => {
       ) : row.kind === 'section' ? (
         <Text color={TEXT}>  {SECTION_LABELS[row.section]}</Text>
       ) : row.kind === 'target' ? (
-        <Text color={MUTED}>    {row.target}</Text>
+        <Text color={TEXT}>    {row.target}</Text>
       ) : null
-    // The entry in full beneath its row, when the field beside the tick would cut it.
-    const fullText = (entry: string, kind: string) =>
-      isEntryCut(entry, kind, columns) ? (
-        <Text color={TEXT} wrap="wrap">
-          {entry
-            .split('\n')
-            .map(line => ENTRY_INDENT + line)
-            .join('\n')}
-        </Text>
-      ) : null
+    // An item's text, indented under its tick so a wrapped line stays in its
+    // column: the entry (unless the field stands in for it), then what a
+    // rewrite replaces, labelled.
+    const itemBody = (key: string, item: StowItem, entry: string, field?: RenderChildren) => (
+      <Box key={`body:${key}`} flexDirection="column" marginLeft={BODY_INDENT}>
+        {field ?? (
+          <Text key={`text:${key}`} color={TEXT} wrap="wrap">
+            {entry}
+          </Text>
+        )}
+        {showsReplaces(item) && (
+          <Text key={`was:${key}`} color={TEXT} italic wrap="wrap">
+            {REPLACES_LABEL}
+            {item.replaces}
+          </Text>
+        )}
+      </Box>
+    )
     // The pane body names its background with its colours: a theme pair, so
     // the text reads under whichever theme is in force, inline or docked.
     const pane = (...children: RenderChildren[]) => (
@@ -408,7 +425,7 @@ export const register: Register = (on, options) => {
       const last = await read($, lastAuto)
       if (last === null) {
         return pane(
-          <Text key="empty" color={MUTED}>
+          <Text key="empty" color={TEXT}>
             No stow plan to review.
           </Text>,
           <Box flexDirection="row" gap={1}>
@@ -424,15 +441,19 @@ export const register: Register = (on, options) => {
         <Text key="last" bold color={TEXT}>
           Last automatic stow: {appliedSummary(last)}
         </Text>,
-        shown.rows.map(row =>
-          row.kind === 'item' ? (
-            <Text color={TEXT} wrap="wrap">
-              {'      '}[{row.item.action}] {row.item.entry}
-            </Text>
-          ) : (
-            heading(row)
-          ),
-        ),
+        shown.rows.map(row => {
+          if (row.kind !== 'item') return heading(row)
+          const key = keyOf(row.home, row.item.id)
+          return (
+            <Box key={`item:${key}`} flexDirection="column" marginBottom={1}>
+              <Text color={TEXT} bold>
+                {'     '}
+                {row.item.action}
+              </Text>
+              {itemBody(key, row.item, row.item.entry)}
+            </Box>
+          )
+        }),
         <Box flexDirection="row" gap={1}>
           {footer}
           {action('close', 'Close', () => closePane($), 'dismiss')}
@@ -442,61 +463,69 @@ export const register: Register = (on, options) => {
 
     const tickMap = await read($, ticks)
     const editMap = await read($, edits)
+    const editingKey = await read($, editing)
     const entryOf = (home: string, item: StowItem) => editMap[keyOf(home, item.id)] ?? item.entry
     const shown = pageOf(reviewRows(loaded), room, await read($, page), row =>
-      row.kind === 'item' ? itemHeight(row.item, columns, entryOf(row.home, row.item)) : 1,
+      row.kind === 'item'
+        ? itemHeight(row.item, columns, entryOf(row.home, row.item), editingKey === keyOf(row.home, row.item.id))
+        : 1,
     )
     const at = Math.min(await read($, page), shown.pages - 1)
     const total = countItems(loaded)
     const kept = total - Object.values(tickMap).filter(value => value === false).length
 
     return pane(
-      <Text key="hint" color={MUTED}>
-        {kept} of {total} items ticked. Untick what should not be saved; edit a line to change its wording.
+      <Text key="hint" color={TEXT}>
+        {kept} of {total} items ticked. Untick what should not be saved; Edit changes an entry's wording.
       </Text>,
       shown.rows.map(row => {
         if (row.kind !== 'item') return heading(row)
         const key = keyOf(row.home, row.item.id)
         const entry = entryOf(row.home, row.item)
+        const isEditing = editingKey === key
+        // A removal's text never changes, so it has no Edit; an edited entry
+        // is drawn in its field until Enter or Done puts its text back.
+        const field = isEditing ? (
+          <Input
+            key={`entry:${key}`}
+            label="New wording: "
+            value={entry}
+            submitLabel="done"
+            autoFocus
+            onInput={(value: string) => {
+              void editItem($, key, value)
+            }}
+            onSubmit={(value: string) => {
+              void editItem($, key, value).then(() => toggleEditing($, key))
+            }}
+          />
+        ) : undefined
         return (
-          <Box key={`item:${key}`} flexDirection="column">
+          <Box key={`item:${key}`} flexDirection="column" marginBottom={1}>
             <Box key={`row:${key}`} flexDirection="row" gap={1}>
-              <Text color={TEXT}>     </Text>
+              <Text color={TEXT}>    </Text>
               <Button key={`tick:${key}`} plain onPress={() => toggleItem($, key)}>
                 <Text color={TEXT}>{tickMap[key] === false ? '[ ]' : '[x]'}</Text>
               </Button>
-              <Text color={MUTED}>{row.item.action}</Text>
-              {row.item.action === 'remove' ? (
-                <Text color={TEXT} wrap="truncate-end">
-                  {row.item.entry}
-                </Text>
-              ) : (
-                <Input
-                  key={`entry:${key}`}
-                  value={entry}
-                  submitLabel="keep"
-                  onInput={(value: string) => {
-                    void editItem($, key, value)
-                  }}
-                  onSubmit={(value: string) => {
-                    void editItem($, key, value)
-                  }}
-                />
-              )}
+              <Text color={TEXT} bold>
+                {row.item.action}
+              </Text>
+              {row.item.action !== 'remove' &&
+                action(`edit:${key}`, isEditing ? 'Done' : 'Edit', () => toggleEditing($, key))}
             </Box>
-            {fullText(entry, row.item.action)}
+            {itemBody(key, row.item, entry, field)}
           </Box>
         )
       }),
       (loaded.exceptions ?? []).map(one => (
-        <Text color={MUTED}>
+        <Text color={TEXT}>
           Not reviewable: {one.home} - {one.reason}
         </Text>
       )),
       <Box flexDirection="row" gap={1}>
         {shown.pages > 1 && action('prev', 'Prev', () => turnPage($, -1, shown.pages))}
         {shown.pages > 1 && (
-          <Text color={MUTED}>
+          <Text color={TEXT}>
             page {at + 1}/{shown.pages}
           </Text>
         )}

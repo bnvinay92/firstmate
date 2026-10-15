@@ -119,12 +119,13 @@ describe('the band', () => {
     await turnEnds($, w)
     for (const surface of ['terminal', 'desktop'] as const) {
       const band = await $.ui.mount({ ...BAND, surface })
-      expect((await band.find({ type: 'Text', text: /mate-a 230k/ })) !== undefined).toBe(true)
-      expect((await band.find({ type: 'Text', text: /mate-b/ })) === undefined).toBe(true)
+      expect((await band.find({ key: 'stow:mate-a' }))?.text).toContain('Stow mate-a (230k)')
+      expect(await band.find({ key: 'stow:mate-b' })).toBeUndefined()
+      expect(await band.find({ key: 'stow:main' })).toBeUndefined()
       await band.unmount()
     }
     const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
-    await band.press({ key: 'stow' })
+    await band.press({ key: 'stow:mate-a' })
     await w.clock.advance(20)
     expect(w.commands).toEqual(['stow draft --mod --homes mate-a'])
     // The main session's own fill is published for every home to read.
@@ -142,7 +143,29 @@ describe('the band', () => {
     await $.session.start({ cwd: HOME, surface: 'terminal', isInteractive: true })
     await turnEnds($, w)
     const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
-    expect(await band.find({ key: 'stow' })).toBeUndefined()
+    expect(await band.find({ key: 'stow:mate-a' })).toBeUndefined()
+  })
+
+  test('offers one button per home over the threshold, and stows only the home pressed', async ($, on) => {
+    const w = world(
+      on,
+      firstmateHome({
+        [`${HOME}/data/secondmates.md`]: `- mate-a - rides (home: ${MATE}; scope: rides; projects: a; added 2026-08-07)\n`,
+        [`${MATE}/state/stow-context.json`]: reading(230_000, 1_000_000),
+      }),
+    )
+    w.tokens = 250_000
+    await $.session.start({ cwd: HOME, surface: 'terminal', isInteractive: true })
+    await turnEnds($, w)
+    const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    expect((await band.find({ key: 'stow:main' }))?.text).toContain('Stow main (250k)')
+    expect((await band.find({ key: 'stow:mate-a' }))?.text).toContain('Stow mate-a (230k)')
+    await band.press({ key: 'stow:main' })
+    await w.clock.advance(20)
+    expect(w.commands).toEqual(['stow draft --mod --homes main'])
+    // While that round runs, no other home can be started beside it.
+    expect(await band.find({ key: 'stow:mate-a' })).toBeUndefined()
+    expect((await band.find({ type: 'Text', text: /under way for main$/ })) !== undefined).toBe(true)
   })
 })
 
@@ -153,7 +176,7 @@ describe('the review pane', () => {
     await $.session.start({ cwd: HOME, surface: 'terminal', isInteractive: true })
     await turnEnds($, w)
     const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
-    await band.press({ key: 'stow' })
+    await band.press({ key: 'stow:main' })
     await w.clock.advance(20)
     expect(w.commands).toEqual(['stow draft --mod --homes main'])
 
@@ -169,6 +192,7 @@ describe('the review pane', () => {
     expect((await pane.find({ type: 'Text', text: /Home: mate-a/ })) !== undefined).toBe(true)
     await pane.press({ key: 'tick:main/k1' })
     expect((await pane.find({ key: 'tick:main/k1' }))?.text).toContain('[ ]')
+    await pane.press({ key: 'edit:main/m1' })
     await pane.input({ key: 'entry:main/m1', text: '- fact, reworded <!--a:2026-10-14-->', kind: 'change' })
     await pane.press({ key: 'save' })
     await w.clock.advance(20)
@@ -186,7 +210,7 @@ describe('the review pane', () => {
     await $.session.start({ cwd: HOME, surface: 'terminal', isInteractive: true })
     await turnEnds($, w)
     const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
-    await band.press({ key: 'stow' })
+    await band.press({ key: 'stow:main' })
     await w.clock.advance(20)
     w.files.set(`${HOME}/state/stow-review.json`, JSON.stringify(REVIEW))
     w.mtimes.set(`${HOME}/state/stow-review.json`, w.clock.now())
@@ -200,8 +224,8 @@ describe('the review pane', () => {
 })
 
 // The colours a pane run may name: theme keys that follow the theme in force,
-// as the pane's own background does.
-const THEME_TEXT = new Set(['text', 'inactive', 'suggestion'])
+// as the pane's own background does, and never the theme's dim grey.
+const THEME_TEXT = new Set(['text', 'suggestion'])
 const LONG_ENTRY = `- ${'the captain approves each stow entry only after reading it whole, '.repeat(6)}end`
 
 async function openReview($: Engine, w: World, review: unknown): Promise<void> {
@@ -209,7 +233,7 @@ async function openReview($: Engine, w: World, review: unknown): Promise<void> {
   await $.session.start({ cwd: HOME, surface: 'terminal', isInteractive: true })
   await turnEnds($, w)
   const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  await band.press({ key: 'stow' })
+  await band.press({ key: 'stow:main' })
   await w.clock.advance(20)
   w.files.set(`${HOME}/state/stow-review.json`, JSON.stringify(review))
   w.mtimes.set(`${HOME}/state/stow-review.json`, w.clock.now())
@@ -234,18 +258,43 @@ describe('the review pane under any theme', () => {
     expect((await pane.find({ key: 'save' }))?.text).toContain('[ Save ]')
   })
 
-  test('a long entry is drawn whole, and still ticks and edits', async ($, on) => {
+  test('an entry is drawn once, whole, under its spelled-out action, and edits in place', async ($, on) => {
     const w = world(on, firstmateHome())
-    const long = { version: 1, homes: [{ home: 'main', items: [{ id: 'l1', section: 'knowledge', action: 'add', target: 'data/captain.md', entry: LONG_ENTRY }] }] }
+    const long = {
+      version: 1,
+      homes: [
+        {
+          home: 'main',
+          items: [
+            { id: 'l1', section: 'knowledge', action: 'add', target: 'data/captain.md', entry: LONG_ENTRY },
+            { id: 'm1', section: 'memory', action: 'rewrite', target: 'data/learnings.md', entry: '- fact, new', replaces: '- fact, old' },
+            { id: 'm2', section: 'memory', action: 'remove', target: 'data/learnings.md', entry: '- stale fact', replaces: '- stale fact' },
+          ],
+        },
+      ],
+    }
     await openReview($, w, long)
     const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    const full = await pane.find({ type: 'Text', text: /reading it whole, end/ })
-    expect(full?.text.replace(/\s+/g, ' ').trim()).toBe(LONG_ENTRY)
-    expect(full?.props.wrap).toBe('wrap')
+    const drawn = await pane.findAll({ type: 'Text', text: /reading it whole, end/ })
+    expect(drawn).toHaveLength(1)
+    expect(drawn[0]?.text.replace(/\s+/g, ' ').trim()).toBe(LONG_ENTRY)
+    expect(drawn[0]?.props.wrap).toBe('wrap')
+    for (const word of ['add', 'rewrite', 'remove']) {
+      expect((await pane.find({ type: 'Text', text: new RegExp(`^\\s*${word}$`) })) !== undefined).toBe(true)
+    }
+    // A rewrite names what it replaces; a removal has nothing to edit.
+    expect((await pane.findAll({ type: 'Text', text: /^replaces: / })).map(text => text.text)).toEqual(['replaces: - fact, old'])
+    expect(await pane.find({ key: 'edit:main/m2' })).toBeUndefined()
+    // No field is drawn until Edit is pressed, and then it stands in for the text.
+    expect(await pane.find({ key: 'entry:main/l1' })).toBeUndefined()
     await pane.press({ key: 'tick:main/l1' })
     expect((await pane.find({ key: 'tick:main/l1' }))?.text).toContain('[ ]')
-    await pane.input({ key: 'entry:main/l1', text: '- short now', kind: 'change' })
+    await pane.press({ key: 'edit:main/l1' })
+    expect((await pane.find({ key: 'entry:main/l1' })) !== undefined).toBe(true)
     expect(await pane.find({ type: 'Text', text: /reading it whole/ })).toBeUndefined()
+    await pane.input({ key: 'entry:main/l1', text: '- short now', kind: 'submit' })
+    expect(await pane.find({ key: 'entry:main/l1' })).toBeUndefined()
+    expect((await pane.findAll({ type: 'Text', text: /^- short now$/ })).length).toBe(1)
   })
 })
 
@@ -292,7 +341,7 @@ describe('Auto and clearing', () => {
     await turnEnds($, w)
     expect(JSON.parse(w.files.get(`${HOME}/state/stow-context.json`) ?? '{}').tokens).toBe(300_000)
     const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
-    expect(await band.find({ key: 'stow' })).toBeUndefined()
+    expect(await band.find({ key: 'stow:mate-a' })).toBeUndefined()
 
     w.files.set(`${HOME}/state/stow-applied.json`, JSON.stringify({ version: 1, at: 42, clear: true, homes: [] }))
     await turnEnds($, w)
