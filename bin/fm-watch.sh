@@ -11,6 +11,9 @@
 # either a paused: external wait or a verified captain-held transfer, is the
 # separate idle absorb case and re-surfaces only on its long bounded cadence,
 # although its initial no-verb status signal still surfaces in normal mode.
+# A bare turn-end from a crew whose log already declares such a wait, or holds
+# a needs-decision it raised that is still open, adds nothing and is absorbed
+# (signal_turnend_declared_wait).
 # That cadence is hours long and condition-aware: a paused: line naming
 # `until <UTC ISO 8601>` is rechecked when that time passes, but a declared time
 # beyond FM_PAUSE_RESURFACE_SECS cannot extend the ordinary recheck cadence, and
@@ -32,7 +35,12 @@
 #                          human the wait is on. Only when neither absorb class
 #                          applies does the log's latest recognized status event decide:
 #                          terminal (captain-relevant) or non-terminal (no verb),
-#                          both surfaced at once. A provably-working stale past the
+#                          both surfaced at once, except that a log firstmate was
+#                          already shown, or one holding an open needs-decision the
+#                          crew raised, alarms once per status-log state and is then
+#                          rechecked on the long cadence instead of on every new pane
+#                          hash (surfaced_status_stale_bound,
+#                          surface_nonterminal_stale). A provably-working stale past the
 #                          wedge threshold also surfaces, with an "escalation N"
 #                          count in the reason; at FM_WEDGE_DEMAND_INSPECT_COUNT
 #                          consecutive escalations on the SAME pane, the reason

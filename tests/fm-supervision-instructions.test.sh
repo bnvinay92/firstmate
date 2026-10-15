@@ -9,10 +9,10 @@ TMP_ROOT=$(fm_test_tmproot fm-supervision-instructions)
 RENDER="$ROOT/bin/fm-supervision-instructions.sh"
 
 # Every rendered block, on every harness and posture, tells the primary that a
-# turn opened only by a wake with nothing for the captain ends without chat
-# text, and never directs a shipshape or other acknowledgement reply. A
-# "Captain, shipshape." per routine wake was the regression this pins.
-test_wake_turns_end_without_chat_text() {
+# turn opened only by a wake with nothing for the captain ends with exactly
+# "Captain, shipshape." and nothing else, and names no other reply. A summary
+# of each routine wake reaching the captain was the regression this pins.
+test_wake_turns_end_with_only_shipshape() {
   local home config harness host afk out
   home="$TMP_ROOT/silent-wake-home"
   config="$TMP_ROOT/silent-wake-config"
@@ -23,14 +23,14 @@ test_wake_turns_end_without_chat_text() {
       if [ "$host" = on ]; then : > "$config/supervision-host"; else : > "$config/supervision-host-off"; fi
       for afk in 0 1; do
         out=$(FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" "$RENDER" --harness "$harness" --afk "$afk")
-        assert_contains "$out" "a turn opened only by a wake that leaves nothing for the captain ends with no chat text, not even an acknowledgement" \
-          "$harness (host $host, afk $afk): the block does not direct a silent end for a no-news wake turn"
-        printf '%s' "$out" | grep -qi 'shipshape' \
-          && fail "$harness (host $host, afk $afk): the block names a shipshape reply: $(printf '%s\n' "$out" | grep -i shipshape)"
+        assert_contains "$out" 'a turn opened only by a wake that leaves nothing for the captain ends with exactly "Captain, shipshape." and nothing else, never a summary of the wake' \
+          "$harness (host $host, afk $afk): the block does not pin the exact no-news wake reply"
+        [ "$(printf '%s\n' "$out" | grep -o 'Captain, [^"]*' | sort -u)" = "Captain, shipshape." ] \
+          || fail "$harness (host $host, afk $afk): the block names a reply other than exactly \"Captain, shipshape.\""
       done
     done
   done
-  pass "renderer tells every harness and posture to end a no-news wake turn without chat text"
+  pass "renderer tells every harness and posture to end a no-news wake turn with only \"Captain, shipshape.\""
 }
 
 test_selected_harness_block_only() {
@@ -219,7 +219,7 @@ test_cross_harness_ordinary_continuation_and_repair_matrix() {
   pass "renderer preserves every harness ordinary-continuation and missing-cycle repair path"
 }
 
-test_wake_turns_end_without_chat_text
+test_wake_turns_end_with_only_shipshape
 test_supervision_host_protocol_on_a_claude_home_unless_off
 test_supervision_host_protocol_on_every_arm_owner
 test_selected_harness_block_only
