@@ -8,6 +8,31 @@ set -u
 TMP_ROOT=$(fm_test_tmproot fm-supervision-instructions)
 RENDER="$ROOT/bin/fm-supervision-instructions.sh"
 
+# Every rendered block, on every harness and posture, tells the primary that a
+# turn opened only by a wake with nothing for the captain ends without chat
+# text, and never directs a shipshape or other acknowledgement reply. A
+# "Captain, shipshape." per routine wake was the regression this pins.
+test_wake_turns_end_without_chat_text() {
+  local home config harness host afk out
+  home="$TMP_ROOT/silent-wake-home"
+  config="$TMP_ROOT/silent-wake-config"
+  mkdir -p "$home/state" "$config"
+  for harness in claude codex opencode pi pi-signed grok cursor omp unknown; do
+    for host in on off; do
+      rm -f "$config/supervision-host" "$config/supervision-host-off"
+      if [ "$host" = on ]; then : > "$config/supervision-host"; else : > "$config/supervision-host-off"; fi
+      for afk in 0 1; do
+        out=$(FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" "$RENDER" --harness "$harness" --afk "$afk")
+        assert_contains "$out" "a turn opened only by a wake that leaves nothing for the captain ends with no chat text, not even an acknowledgement" \
+          "$harness (host $host, afk $afk): the block does not direct a silent end for a no-news wake turn"
+        printf '%s' "$out" | grep -qi 'shipshape' \
+          && fail "$harness (host $host, afk $afk): the block names a shipshape reply: $(printf '%s\n' "$out" | grep -i shipshape)"
+      done
+    done
+  done
+  pass "renderer tells every harness and posture to end a no-news wake turn without chat text"
+}
+
 test_selected_harness_block_only() {
   local out
   out=$("$RENDER" --harness codex)
@@ -194,6 +219,7 @@ test_cross_harness_ordinary_continuation_and_repair_matrix() {
   pass "renderer preserves every harness ordinary-continuation and missing-cycle repair path"
 }
 
+test_wake_turns_end_without_chat_text
 test_supervision_host_protocol_on_a_claude_home_unless_off
 test_supervision_host_protocol_on_every_arm_owner
 test_selected_harness_block_only

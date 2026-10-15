@@ -243,6 +243,7 @@ if [ -n "$HOST_SNIPPET" ]; then
   printf '%s\n' '- Supervision host: on; it takes away-posture wakes and, where the dialog mirror is verified, eligible attended wakes itself, and hands the rest to you (protocol at the end of this block).'
 fi
 ordinary_wake_line
+printf '%s\n' '- Silent wake turns: a turn opened only by a wake that leaves nothing for the captain ends with no chat text, not even an acknowledgement (AGENTS.md section 9 owns this rule).'
 printf '\n'
 render_snippet
 printf '\n'

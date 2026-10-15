@@ -947,6 +947,19 @@ status_own_open_decisions() {  # <status-file>
   done
 }
 
+# 0 when status_own_open_decisions still holds a decision the task OPENED with
+# `needs-decision`: the task itself asked a question that is still unanswered,
+# so it is waiting on its supervisor. 1 for none, and for an unreadable log.
+status_own_open_needs_decision() {  # <status-file>
+  local verb
+  while IFS=$'\t' read -r _ verb _; do
+    [ "$verb" = needs-decision ] && return 0
+  done <<EOF
+$(status_own_open_decisions "$1")
+EOF
+  return 1
+}
+
 # 0 when the fold above still holds at least one decision OPENED by
 # `needs-decision` - the status side's own record that a human was asked
 # something and has not answered. A `blocked` record is deliberately not this: a

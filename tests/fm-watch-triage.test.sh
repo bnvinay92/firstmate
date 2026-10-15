@@ -2285,6 +2285,132 @@ test_terminal_stale_surfaced() {
   pass "a stale pane sitting on a terminal status is surfaced (queue + exit)"
 }
 
+# Record a status log as already shown to firstmate through its first
+# captain-relevant event, exactly as the signal path's mark_surfaced does.
+mark_status_presented() {  # <state> <task>
+  local file="$1/$2.status" record end rest ident
+  record=$(status_span_first_actionable_record "$file" 0)
+  end=${record%%$'\t'*}; rest=${record#*$'\t'}; ident=${rest%%$'\t'*}
+  status_presentation_marker_commit "$1/.hb-surfaced-$2" "$file" "$end" "$ident"
+}
+
+# Start a watcher on one stale pane fixture: the pane hash is already recorded
+# once, so the first poll sees it stale.
+stale_pane_watch_bg() {  # <dir> <window> <pane-text> <out> [extra env...]
+  local dir=$1 window=$2 text=$3 out=$4 key
+  shift 4
+  printf '%s' "$text" > "$dir/pane.txt"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  printf '%s' "$(hash_text "$text")" > "$dir/state/.hash-$key"
+  printf '1\n' > "$dir/state/.count-$key"
+  PATH="$dir/fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_STATE_OVERRIDE="$dir/state" FM_CREW_STATE_BIN="$dir/fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=999 \
+    FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$@" "$WATCH" > "$out" &
+}
+
+# --- a worker already waiting on firstmate does not reopen its turn -----------
+# A ship that reported done and sits idle, or a scout serving a live review
+# board with its question still open, changes its pane hash on every display
+# tick. Each new hash used to alarm firstmate again with nothing new, opening a
+# monitoring-only turn each time. The status already shown is the first sight;
+# the idle pane is rechecked on the long cadence, and any status append alarms.
+test_terminal_stale_already_presented_absorbed_then_rechecked() {
+  local dir state out pid key=test_fm-shipped throttle phase
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · no current-state source available'
+  for phase in absorbed recheck new-status; do
+    dir=$(make_case "terminal-stale-presented-$phase"); state="$dir/state"; out="$dir/watch.out"
+    throttle="$state/.paused-resurfaced-$key"
+    printf 'window=test:fm-shipped\nkind=ship\n' > "$state/shipped.meta"
+    printf 'done: PR https://example.test/pr/9\n' > "$state/shipped.status"
+    mark_status_presented "$state" shipped || fail "fixture: could not mark the done line as presented"
+    case "$phase" in
+      recheck)
+        # The recheck window this declaration started has run out.
+        printf 'surfaced:%s' "$(status_observed_signature "$state/shipped.status")" > "$throttle"
+        set_mtime "$(( $(date +%s) - 20000 ))" "$throttle"
+        ;;
+      new-status)
+        # A status line firstmate has not been shown is a new signature.
+        printf 'blocked: CI is red\n' >> "$state/shipped.status"
+        ;;
+    esac
+    printf '%s' "$(seen_sig "$state/shipped.status")" > "$state/.seen-shipped_status"
+    stale_pane_watch_bg "$dir" test:fm-shipped 'idle after the PR' "$out"
+    pid=$!
+    if [ "$phase" = absorbed ]; then
+      wait_for_absorbed "$state" "$pid" "absorbed stale (open captain call already surfaced for this status): test:fm-shipped" \
+        || fail "a stale pane whose done line firstmate was already shown woke firstmate again: $(cat "$out")"
+      reap "$pid"
+      [ ! -s "$state/.wake-queue" ] || fail "the already-presented done line queued a stale wake"
+      [ "$(cat "$throttle" 2>/dev/null || true)" = "surfaced:$(status_observed_signature "$state/shipped.status")" ] \
+        || fail "the absorbed stale did not start its recheck window for this status"
+    else
+      wait_for_exit "$pid" 100 || { reap "$pid"; fail "$phase: the stale pane did not alarm"; }
+      grep -Fx "stale: test:fm-shipped" "$out" >/dev/null || fail "$phase: no stale wake was printed: $(cat "$out")"
+    fi
+  done
+  pass "a stale pane on a status firstmate was already shown is absorbed, rechecked on the long cadence, and alarms on any new status"
+}
+
+test_nonterminal_stale_with_open_decision_absorbed() {
+  local dir state out pid
+  dir=$(make_case nonterminal-stale-open-decision); state="$dir/state"; out="$dir/watch.out"
+  printf 'window=test:fm-board\nkind=scout\n' > "$state/board.meta"
+  printf 'needs-decision [key=board-review]: the captain reviews the board\nworking: serving the review board\n' > "$state/board.status"
+  printf '%s' "$(seen_sig "$state/board.status")" > "$state/.seen-board_status"
+  mark_status_presented "$state" board || fail "fixture: could not mark the decision as presented"
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · no current-state source available'
+  stale_pane_watch_bg "$dir" test:fm-board 'board armed' "$out"
+  pid=$!
+  wait_for_absorbed "$state" "$pid" "absorbed non-terminal stale (declared wait or open captain call already re-surfaced this window): test:fm-board" \
+    || fail "an idle worker with its own open question woke firstmate again: $(cat "$out")"
+  reap "$pid"
+  [ ! -s "$state/.wake-queue" ] || fail "the open-decision stale queued a wake"
+
+  # Once the question is answered the bound no longer applies.
+  dir=$(make_case nonterminal-stale-answered); state="$dir/state"; out="$dir/watch.out"
+  printf 'window=test:fm-board\nkind=scout\n' > "$state/board.meta"
+  printf 'needs-decision [key=board-review]: the captain reviews the board\nresolved [key=board-review]: answered\nworking: building it\n' > "$state/board.status"
+  printf '%s' "$(seen_sig "$state/board.status")" > "$state/.seen-board_status"
+  mark_status_presented "$state" board || fail "fixture: could not mark the decision as presented"
+  stale_pane_watch_bg "$dir" test:fm-board 'board armed' "$out"
+  pid=$!
+  wait_for_exit "$pid" 100 || { reap "$pid"; fail "an idle worker whose question was answered did not alarm"; }
+  grep -Fx "stale: test:fm-board" "$out" >/dev/null || fail "the answered worker's stale wake was not printed"
+  pass "an idle worker with its own open question is absorbed, and alarms once the question is answered"
+}
+
+test_turn_ended_declared_wait_absorbed() {
+  local dir state fakebin out pid status
+  for status in "paused: waiting for the captain's board round" \
+    "needs-decision [key=board-review]: review the board"$'\n'"working: board armed"; do
+    dir=$(make_case "turn-ended-declared-wait-${#status}"); state="$dir/state"; fakebin="$dir/fakebin"
+    out="$dir/watch.out"
+    printf 'window=test:fm-board\nkind=scout\n' > "$state/board.meta"
+    printf '%s\n' "$status" > "$state/board.status"
+    printf '%s' "$(seen_sig "$state/board.status")" > "$state/.seen-board_status"
+    : > "$state/board.turn-ended"
+    export FM_FAKE_CREW_STATE='state: unknown · source: none · no current-state source available'
+    watch_bg "$state" "$fakebin" "$out"
+    pid=$!
+    wait_for_absorbed "$state" "$pid" "absorbed benign signal: $state/board.turn-ended" \
+      || fail "a bare turn-end from a worker already waiting ($status) woke firstmate: $(cat "$out")"
+    reap "$pid"
+    [ ! -s "$state/.wake-queue" ] || fail "a declared-wait turn-end queued a wake"
+  done
+
+  dir=$(make_case turn-ended-working-no-wait); state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"
+  printf 'window=test:fm-busy\nkind=ship\n' > "$state/busy.meta"
+  printf 'working: implementing\n' > "$state/busy.status"
+  printf '%s' "$(seen_sig "$state/busy.status")" > "$state/.seen-busy_status"
+  : > "$state/busy.turn-ended"
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  wait_for_exit "$pid" 100 || { reap "$pid"; fail "a bare turn-end with no declared wait was absorbed"; }
+  grep -F "signal: $state/busy.turn-ended" "$out" >/dev/null || fail "the undeclared turn-end was not surfaced"
+  pass "a bare turn-end is absorbed only when the worker already declared a wait or holds an open question"
+}
+
 # --- stale pane, STALE terminal status overridden by an active run: absorbed ---
 # Regression for the 2026-07 herdr false-surface incidents: a crew's own status
 # log gets no new entry once firstmate hands it to a no-mistakes validation
@@ -6674,6 +6800,9 @@ test_routine_appends_after_a_classified_event_stay_absorbed
 test_unreadable_status_reports_once_per_file_state
 test_permission_recovery_surfaces_preserved_status
 test_terminal_stale_surfaced
+test_terminal_stale_already_presented_absorbed_then_rechecked
+test_nonterminal_stale_with_open_decision_absorbed
+test_turn_ended_declared_wait_absorbed
 test_stale_terminal_status_overridden_by_active_run
 test_nonterminal_stale_provably_working_absorbed_then_escalated
 test_wedge_escalation_marks_demand_deep_inspection_after_threshold
