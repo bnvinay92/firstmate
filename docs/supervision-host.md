@@ -106,7 +106,7 @@ Only an away record is away: no record, or the record daemon-backed quiet mode w
 ### Attended
 
 The host asks the Pi branch's offer rule (`branchOfferForWake`, through `bin/fm-branch-dispatch.mjs offer`) whether the branch may take the close.
-So a close reaches main off Pi exactly when it would on Pi: a check trigger, a decision-owned signal or stale trigger, and a scan that is unsafe or holds nothing for the branch stay main's.
+So a close reaches main off Pi exactly when it would on Pi: a check trigger, a decision-owned signal or stale trigger, and a scan that is unsafe or holds nothing for the branch stay main's, except a merge-landed check under the [routine PR outcomes](configuration.md#routine-pr-outcomes-configroutine-pr-outcomes) opt-in.
 On that main-only pass-through the host starts the successor watcher cycle and leaves it running, then prints the close unchanged.
 That successor, like one a turn hands back at its start (see [Away](#away)), runs in a process group of its own, so the harness tearing down the hook's group after the rewake does not stop it.
 The host leaves the watcher's recovery marker reading downtime, confirming no handling handoff, because the re-arm owner delivers a close to main only while that marker reads downtime.
@@ -222,6 +222,7 @@ Main's reply to the captain covers only the outcomes still open, as if an alread
 Main runs the printed acknowledgement for every presented outcome, settled and handled open ones alike.
 Anything main must act on while attended to move the work forward, such as a local-only branch to land or a pull request to merge, is a captain outcome on the host even when the captain asked not to hear about that work, reported once per unchanged situation (`bin/fm-branch-prompt.sh` "Verdict: routine or captain"), because a routine outcome opens no main turn.
 A secondmate listed in `config/routine-child-outcomes` has outcomes covering only its per-child outcome lines stored as routine whatever the engine reported ([configuration](configuration.md#routine-child-outcomes-configroutine-child-outcomes)).
+Under `config/routine-pr-outcomes` a parked pull request's ready outcome and a completed merge-landed cleanup are stored routine the same way, and the attended offer may take a merge-landed check ([configuration](configuration.md#routine-pr-outcomes-configroutine-pr-outcomes)).
 
 One limit: if the captain goes away and returns while an attended engine turn runs, and the host is terminated before that turn's `branch-outcome` wake is delivered, no immediate wake reaches main.
 The captain row is still durable, and the next drain presents it until it is acknowledged.

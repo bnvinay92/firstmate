@@ -172,6 +172,59 @@ test_main_direct_terminal_presentation_receipt() {
   pass "main direct terminal presentation has a durable receipt"
 }
 
+# Arm <id>'s merge poll for <url> through bin/fm-pr-check.sh, with a stand-in
+# gh that reports a ready PR whose head is the task's recorded pr_head.
+arm_pr_poll() { # <home> <id> <url>
+  local home=$1 id=$2 url=$3 fake="$WORLD/armbin" head
+  head=$(sed -n 's/^pr_head=//p' "$home/state/$id.meta" | tail -n 1)
+  mkdir -p "$fake"
+  cat > "$fake/gh" <<SH
+#!/usr/bin/env bash
+case "\$*" in
+  *isDraft*) printf '{"isDraft":false}\n' ;;
+  *headRefOid*) printf '%s\n' '$head' ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$fake/gh"
+  grep -v '^pr=' "$home/state/$id.meta" > "$home/state/$id.meta.tmp"
+  printf 'pr=%s\n' "$url" >> "$home/state/$id.meta.tmp"
+  mv "$home/state/$id.meta.tmp" "$home/state/$id.meta"
+  chmod 600 "$home/state/$id.meta"
+  PATH="$fake:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_CONFIG_OVERRIDE="$home/config" \
+    "$ROOT/bin/fm-pr-check.sh" "$id" "$url" >/dev/null 2>&1 || fail "fixture: could not arm the merge poll for $id"
+  age "$home/state/$id.meta" "$home/state/$id.status" "$home/state/$id.turn-ended"
+}
+
+# Under the routine PR outcomes opt-in, a done ship whose PR is parked (yolo
+# off, merge poll armed) is recorded presented with no wake; without the
+# opt-in, with yolo on, or with no armed poll it is presented exactly as before.
+test_routine_pr_outcomes_present_parked_done_ship_without_a_wake() {
+  local url=https://github.com/o/r/pull/1 case
+  for case in opted not-opted yolo unarmed; do
+    make_world "routine-pr-$case"
+    write_child "$MAIN" child "done: PR $url checks green"
+    [ "$case" = not-opted ] || : > "$MAIN/config/routine-pr-outcomes"
+    if [ "$case" = yolo ]; then
+      sed 's/^yolo=off$/yolo=on/' "$MAIN/state/child.meta" > "$MAIN/state/child.meta.tmp"
+      mv "$MAIN/state/child.meta.tmp" "$MAIN/state/child.meta"
+    fi
+    [ "$case" = unarmed ] || arm_pr_poll "$MAIN" child "$url"
+    FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup
+    if [ "$case" = opted ]; then
+      [ ! -s "$MAIN/state/.wake-queue" ] || fail "an opted-in parked PR must not queue a presentation wake: $(cat "$MAIN/state/.wake-queue")"
+      [ "$(outcome_count "$MAIN" presented)" = 1 ] || fail "an opted-in parked PR must be recorded presented"
+      [ "$(outcome_count "$MAIN" pending)" = 0 ] || fail "an opted-in parked PR must leave no pending receipt"
+      FM_FAKE_CREW_STATE='done' FM_INACTIVE_RECONCILE_SECS=60 run_reconcile "$MAIN" --startup
+      [ ! -s "$MAIN/state/.wake-queue" ] || fail "a later scan must not present the parked PR again"
+    else
+      [ "$(wake_count "$MAIN" 'inactive-outcome:')" = 1 ] || fail "case $case must still queue the presentation wake"
+      [ "$(outcome_count "$MAIN" pending)" = 1 ] || fail "case $case must keep its pending receipt"
+    fi
+  done
+  pass "routine PR outcomes keep only a parked done ship's presentation off main"
+}
+
 # Away-posture regression: a branch-actor drain that consumes an
 # inactive-outcome check row must retire its terminal-outcome receipt exactly
 # like a main ack does. The 2026-09-25 away window on the supervision host
@@ -1075,5 +1128,6 @@ test_notice_recovery_does_not_duplicate_wake
 test_missing_parent_binding_names_itself
 test_reconciliation_never_calls_forge
 test_reconciliation_sets_no_forge_mode_for_state_read
+test_routine_pr_outcomes_present_parked_done_ship_without_a_wake
 
 echo "all inactive reconciliation tests passed"

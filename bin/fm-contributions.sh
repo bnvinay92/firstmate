@@ -92,7 +92,11 @@
 # contribution author) and issue transitions to ready-for-pr persist as pending
 # before any wake. poll appends ordinary durable check wakes through fm-wake-lib
 # and emits only newly durable signals for the authenticated check to surface.
-# ack removes
+# Under the routine PR outcomes opt-in (docs/configuration.md "Routine PR
+# outcomes"), poll removes an approval review with no body from pending as soon
+# as it is recorded (bin/fm-routine-pr-lib.sh owns the test) and emits no wake
+# for it; the observation still carries the review, and the token stays in seen
+# and notified. ack removes
 # only the named pending token. A crash after enqueue can duplicate a wake but
 # cannot consume the pending signal. Source bodies are data, never commands.
 # All mutations serialize on this home's .contributions.lock. Writes refuse
@@ -108,9 +112,12 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-$FM_ROOT}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 export FM_HOME FM_STATE_OVERRIDE="$STATE"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-routine-pr-lib.sh
+. "$SCRIPT_DIR/fm-routine-pr-lib.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-path-lib.sh
@@ -342,11 +349,23 @@ observe() { # canonical GitHub URL -> normalized JSON
 }
 
 publish_pending() { # task canonical-url record-file
-  local task=$1 url=$2 record=$3 token key count emitted status
+  local task=$1 url=$2 record=$3 token key count emitted status routine=0 type body
   count=$(jq '.pending | length' "$record")
   [ "$count" -gt 0 ] || return 0
+  ! fm_routine_pr_outcomes_enabled "$CONFIG" || routine=1
   while IFS= read -r token; do
     [ -n "$token" ] || continue
+    if [ "$routine" -eq 1 ]; then
+      type=$(jq -r --arg token "$token" '.pending[] | select(.token == $token) | .type // ""' "$record" | head -n 1)
+      body=$(jq -r --arg token "$token" '.pending[] | select(.token == $token) | .body // ""' "$record")
+      if fm_routine_pr_contribution_event "$type" "$token" "$body"; then
+        jq --arg token "$token" '.pending |= map(select(.token != $token)) | .notified = ((.notified // []) + [$token] | unique)' \
+          "$record" > "$TMP/notified.json"
+        mv "$TMP/notified.json" "$record"
+        write_record "$task" "$record"
+        continue
+      fi
+    fi
     key=$(printf '%s\n%s\n' "$url" "$token" | shasum -a 256 | awk '{print $1}')
     emitted=0
     status=0

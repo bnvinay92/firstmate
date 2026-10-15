@@ -49,7 +49,9 @@
 #     engine errors, and the Pi branch's offer rule
 #     (bin/fm-branch-dispatch.mjs offer) says the branch may take this close,
 #     so main-only classes (check triggers, decision-owned triggers, a scan
-#     that is unsafe or holds nothing for the branch) stay main's. That
+#     that is unsafe or holds nothing for the branch) stay main's; under the
+#     routine PR outcomes opt-in (bin/fm-routine-pr-lib.sh) the offer is asked
+#     with --routine-pr-outcomes, so a merge-landed check may be taken. That
 #     pass-through starts the successor watcher cycle and leaves it running
 #     before the close is printed, so supervision continues when the session
 #     drops the handoff. It confirms no handling handoff, so the recovery
@@ -191,6 +193,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-supervision-engine-lib.sh"
 # shellcheck source=bin/fm-afk-contract.sh
 . "$SCRIPT_DIR/fm-afk-contract.sh"
+# shellcheck source=bin/fm-routine-pr-lib.sh
+. "$SCRIPT_DIR/fm-routine-pr-lib.sh"
 
 FIRST_ARM_RESTART=0
 case "${1:-}" in
@@ -1031,13 +1035,15 @@ attended_acceptor() {  # <first-reason-line>
   local offer=
   ATTENDED_WHY=
   ATTENDED_OFFER=
+  set -- "$1" offer
+  ! fm_routine_pr_outcomes_enabled "$CONFIG" || set -- "$@" --routine-pr-outcomes
   if ! fm_supervision_host_attended_ready "$CONFIG" "$PRIMARY"; then
     ATTENDED_WHY=$FM_SUPERVISION_HOST_UNREADY
   elif ! fm_supervision_host_main_key "$STATE" >/dev/null; then
     ATTENDED_WHY="the main session could not be identified"
   elif health_cooling; then
     ATTENDED_WHY="the supervision session is cooling down after engine errors"
-  elif ! offer=$(printf '%s\n' "$1" | node "$SCRIPT_DIR/fm-branch-dispatch.mjs" offer 2>/dev/null); then
+  elif ! offer=$(printf '%s\n' "$1" | node "$SCRIPT_DIR/fm-branch-dispatch.mjs" "${@:2}" 2>/dev/null); then
     ATTENDED_WHY="branch eligibility could not be computed"
   elif [ "$(printf '%s\n' "$offer" | sed -n 's/^eligible=//p')" != 1 ]; then
     ATTENDED_WHY="main-only"

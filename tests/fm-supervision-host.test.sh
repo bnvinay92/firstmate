@@ -179,7 +179,130 @@ test_report_stores_listed_secondmate_child_outcomes_as_routine() {
   pass "report surface: a listed secondmate's per-child outcomes are stored routine, and nothing else is"
 }
 
+# Make <task> in <home> a ship with yolo off whose merge poll is armed for
+# <url>, through bin/fm-pr-check.sh and a stand-in gh reporting a ready PR.
+arm_parked_pr() {  # <home> <task> <url> [yolo]
+  local home=$1 task=$2 url=$3 yolo=${4:-off} fake="$1/armbin"
+  mkdir -p "$fake" "$home/wt-$task"
+  cat > "$fake/gh" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *isDraft*) printf '{"isDraft":false}\n' ;;
+  *headRefOid*) printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$fake/gh"
+  [ -f "$home/state/$task.meta" ] || printf 'project=demo\nwindow=fm-%s\n' "$task" > "$home/state/$task.meta"
+  printf 'kind=ship\nmode=no-mistakes\nyolo=%s\nworktree=%s\n' "$yolo" "$home/wt-$task" >> "$home/state/$task.meta"
+  chmod 600 "$home/state/$task.meta"
+  PATH="$fake:$PATH" FM_HOME="$home" "$ROOT/bin/fm-pr-check.sh" "$task" "$url" >/dev/null 2>&1 \
+    || fail "fixture: could not arm the merge poll for $task"
+}
+
+# Under config/routine-pr-outcomes a captain report is stored routine when its
+# status lines only say a parked PR is ready, or when a merge-landed check's
+# cleanup completed; every other shape keeps the captain verdict.
+test_report_stores_routine_pr_outcomes_as_routine() {
+  local home state out url=https://github.com/o/r/pull/7 seq=0
+  home="$TMP_ROOT/report-routine-pr"
+  state="$home/state"
+  mkdir -p "$state" "$home/config"
+  arm_parked_pr "$home" alpha "$url"
+  : > "$home/config/routine-pr-outcomes"
+  line() {  # <verb> <note>
+    printf '%s [at=%s]: %s\n' "$1" "$(date +%s)" "$2" >> "$state/alpha.status"
+  }
+  claim() {  # <kind> <payload>
+    seq=$((seq + 1))
+    printf '%s\t%s\t%s\talpha.status\t%s\n' "$(date +%s)" "$seq" "$1" "$2" >> "$state/.wake-queue"
+    printf 'turn=t%s\nrows=%s\ntasks=alpha\nunscoped=0\nwake=%s\nposture=attended\n' "$seq" "$seq" "$2" > "$state/.supervision-host-turn"
+  }
+  report() {
+    FM_HOME="$home" FM_SUPERVISION_ACTOR=branch FM_BRANCH_REPORT_TURN="t$seq" "$REPORT" \
+      --task alpha --verdict captain --summary "alpha: the PR $url is ready for review" 2>&1
+  }
+
+  line working 'fix implemented'
+  line 'done' "PR $url checks green"
+  claim signal "signal: $state/alpha.status"
+  out=$(report)
+  assert_contains "$out" "stored as routine: config/routine-pr-outcomes is set" "a parked PR's ready report must say it was stored routine"
+  assert_contains "$out" "recorded seq 1 [routine]" "a parked PR's ready report must be stored routine"
+
+  line blocked 'CI is red on the integration lane'
+  line 'done' "PR $url checks green"
+  claim signal "signal: $state/alpha.status"
+  out=$(report)
+  assert_contains "$out" "recorded seq 2 [captain]" "a blocker beside the ready line must keep the captain verdict"
+
+  line 'done' "PR https://github.com/o/r/pull/8"
+  claim signal "signal: $state/alpha.status"
+  out=$(report)
+  assert_contains "$out" "recorded seq 3 [captain]" "a ready line naming a PR the poll does not watch must stay captain"
+
+  rm -f "$home/config/routine-pr-outcomes"
+  line 'done' "PR $url checks green"
+  claim signal "signal: $state/alpha.status"
+  out=$(report)
+  assert_contains "$out" "recorded seq 4 [captain]" "without the opt-in a ready report must stay captain"
+  : > "$home/config/routine-pr-outcomes"
+
+  sed 's/^yolo=off$/yolo=on/' "$state/alpha.meta" > "$state/alpha.meta.tmp" && mv "$state/alpha.meta.tmp" "$state/alpha.meta"
+  line 'done' "PR $url checks green"
+  claim signal "signal: $state/alpha.status"
+  out=$(report)
+  assert_contains "$out" "recorded seq 5 [captain]" "a yolo ship's ready report must stay captain because MAIN merges it"
+
+  claim check "check: merge landed: alpha $url"
+  out=$(report)
+  assert_contains "$out" "recorded seq 6 [captain]" "a merge whose cleanup left the task record must stay captain"
+  rm -f "$state/alpha.meta"
+  rm -f "$home/config/routine-pr-outcomes"
+  out=$(report)
+  assert_contains "$out" "recorded seq 7 [captain]" "without the opt-in a completed merge cleanup must stay captain"
+  : > "$home/config/routine-pr-outcomes"
+  out=$(report)
+  assert_contains "$out" "stored as routine: config/routine-pr-outcomes is set and alpha's PR merged" "a completed merge cleanup must say it was stored routine"
+  assert_contains "$out" "recorded seq 8 [routine]" "a completed merge cleanup must be stored routine"
+  claim signal "signal: $state/alpha.status"
+  printf '%s\t%s\tcheck\tmerged-alpha\tcheck: merge landed: alpha %s\n' "$(date +%s)" 99 "$url" >> "$state/.wake-queue"
+  printf 'turn=t%s\nrows=%s 99\ntasks=alpha\nunscoped=0\nwake=check\nposture=attended\n' "$seq" "$seq" > "$state/.supervision-host-turn"
+  out=$(report)
+  assert_contains "$out" "recorded seq 9 [captain]" "a merge row claimed beside another row must stay captain"
+  pass "report surface: routine PR outcomes store only a parked PR's ready line and a completed merge cleanup as routine"
+}
+
 # --- dispatch entry -----------------------------------------------------------
+
+# Only the attended host under config/routine-pr-outcomes may take a
+# merge-landed check, scoped to its task, and only while no other check row
+# waits for main.
+test_dispatch_entry_offers_merge_landed_under_routine_pr_outcomes() {
+  local home state out
+  home="$TMP_ROOT/dispatch-routine-pr"
+  state="$home/state"
+  mkdir -p "$state"
+  printf 'project=demo\nwindow=fm-demo\n' > "$state/demo.meta"
+  printf 'project=demo\nwindow=fm-mate\nkind=secondmate\n' > "$state/mate.meta"
+  append_wake "$state" check merged-demo "check: merge landed: demo https://github.com/o/r/pull/7"
+
+  out=$(printf 'check: %s/demo.check.sh: merged\n' "$state" | FM_HOME="$home" node "$DISPATCH" offer)
+  assert_contains "$out" "eligible=0" "without the opt-in a merge-landed check must stay main's"
+  out=$(printf 'check: %s/demo.check.sh: merged\n' "$state" | FM_HOME="$home" node "$DISPATCH" offer --routine-pr-outcomes)
+  assert_contains "$out" "eligible=1" "under the opt-in the attended host must take a merge-landed check"
+  assert_contains "$out" "rows=1" "the merge row must be claimed"
+  assert_contains "$out" "tasks=demo" "the merge row must be scoped to the task it names"
+  assert_contains "$out" "unscoped=0" "a claimed merge row must leave the claim scoped"
+
+  append_wake "$state" check merged-mate "check: merge landed: mate https://github.com/o/r/pull/9"
+  append_wake "$state" check merged-gone "check: merge landed: gone https://github.com/o/r/pull/10"
+  out=$(printf 'check: merge landed: demo\n' | FM_HOME="$home" node "$DISPATCH" offer --routine-pr-outcomes)
+  assert_contains "$out" "eligible=0" "a merge row for a secondmate or a task with no record must keep the check trigger main's"
+  assert_contains "$out" "rows=1" "only the ordinary task's merge row may be claimed"
+  pass "dispatch entry: the routine PR outcomes opt-in moves only a recorded task's merge-landed check to the attended host"
+}
+
 
 test_dispatch_entry_scopes_rows_and_renders_the_away_tail() {
   local home state out rc
@@ -743,6 +866,43 @@ test_captain_leaving_mid_turn_keeps_its_captain_outcome_for_the_return() {
   drained=$(FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" 2>&1' "$ROOT/bin/fm-wake-drain.sh")
   assert_contains "$drained" " ago] demo: stub handled demo" "after the return the drain must present the away window's captain outcome"
   pass "host: a captain outcome recorded after the captain left waits for the return, then reaches main's drain"
+}
+
+# Under config/routine-pr-outcomes a worker's PR-ready line that the engine
+# reports as a captain outcome stays off main, and a merge-landed check queued
+# beside a later close is claimed by the engine instead of waiting for main;
+# without the opt-in the same ready line wakes main exactly as before.
+test_attended_routine_pr_outcomes_stay_off_main() {
+  local home plain url=https://github.com/o/r/pull/7
+  home=$(make_home attended-routine-pr attended)
+  arm_parked_pr "$home" demo "$url"
+  : > "$home/config/routine-pr-outcomes"
+  echo captain > "$home/stub-mode"
+  start_host "$home"
+  wait_until 150 watcher_live "$home" || fail "routine PR: the host never started a watcher cycle"
+  append_status "$home" "PR $url checks green" 'done'
+  wait_until 250 handled_at_least "$home" 1 || fail "routine PR: the ready line was not handled: $(cat "$home/state/.supervision-host.log")"
+  assert_grep 'stored as routine: config/routine-pr-outcomes is set' "$home/engine-report.log" "the engine's captain report must be stored routine"
+  assert_re '"seq":1,.*"verdict":"routine"' "$home/state/branch-outcomes.jsonl" "the ready outcome must be stored routine"
+  [ ! -s "$home/host.rc" ] || fail "a routine PR-ready outcome woke main: $(cat "$home/host.out")"
+
+  echo handle > "$home/stub-mode"
+  append_wake "$home/state" check "merged-demo-$url" "check: merge landed: demo $url"
+  append_status "$home" 'cleanup underway'
+  wait_until 250 handled_at_least "$home" 2 || fail "routine PR: the next close was not handled: $(cat "$home/state/.supervision-host.log")"
+  assert_no_grep 'merge landed' "$home/state/.wake-queue" "the engine must claim the merge-landed check instead of leaving it for main"
+  [ ! -s "$home/host.rc" ] || fail "a handled merge-landed check woke main: $(cat "$home/host.out")"
+  stop_home_processes "$home"
+
+  plain=$(make_home attended-routine-pr-off attended)
+  arm_parked_pr "$plain" demo "$url"
+  echo captain > "$plain/stub-mode"
+  start_host "$plain"
+  wait_until 150 watcher_live "$plain" || fail "routine PR off: the host never started a watcher cycle"
+  append_status "$plain" "PR $url checks green" 'done'
+  wait_until 250 host_exited "$plain" || fail "routine PR off: the ready outcome did not wake main: $(cat "$plain/state/.supervision-host.log")"
+  assert_re '^supervision-host: branch-outcome: ' "$plain/host.out" "without the opt-in the ready outcome must wake main as before"
+  pass "host: under the opt-in a parked PR's ready line and its merge-landed check stay off main, and without it they do not"
 }
 
 # A quiet record left without its daemon (no state/.afk) is a present captain,
@@ -1790,7 +1950,9 @@ run_case test_claude_stop_hook_notifies_when_closed_announced_successor_downtime
 run_case test_report_surface_enforces_actor_turn_and_scope
 run_case test_report_after_the_return_is_queued_for_main
 run_case test_report_stores_listed_secondmate_child_outcomes_as_routine
+run_case test_report_stores_routine_pr_outcomes_as_routine
 run_case test_dispatch_entry_scopes_rows_and_renders_the_away_tail
+run_case test_dispatch_entry_offers_merge_landed_under_routine_pr_outcomes
 run_case test_branch_outcomes_only_on_a_host_home_off_pi
 run_case test_branch_outcomes_put_captain_first_and_collapse_routine_overflow
 run_case test_branch_outcomes_collapse_repeated_captain_outcomes_per_task
@@ -1807,6 +1969,7 @@ run_case test_branch_outcomes_keep_a_drain_presented_outcome_across_a_switch_to_
 run_case test_branch_outcomes_keep_a_drain_presented_outcome_across_an_index_repair
 run_case test_attended_routine_wake_is_handled_on_the_engine_and_stays_off_main
 run_case test_attended_captain_outcome_reaches_main_through_branch_outcomes
+run_case test_attended_routine_pr_outcomes_stay_off_main
 run_case test_captain_leaving_mid_turn_keeps_its_captain_outcome_for_the_return
 run_case test_quiet_record_without_its_daemon_is_a_present_captain
 run_case test_attended_main_only_close_passes_straight_to_main

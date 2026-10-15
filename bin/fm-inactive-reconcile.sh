@@ -64,7 +64,11 @@
 # through bin/fm-parent-channel-lib.sh; the ledger-first path and the inactive
 # path share the same receipt store.
 # In a main home, a presentation-stage record is acknowledged by fm-wake-drain
-# only after its corresponding inactive-outcome wake is handled.
+# only after its corresponding inactive-outcome wake is handled. Under the
+# routine PR outcomes opt-in (docs/configuration.md "Routine PR outcomes"), a
+# done ship whose PR is parked (bin/fm-routine-pr-lib.sh) is acknowledged as
+# presented at once and queues no wake, because its armed merge poll still
+# wakes this home when that PR merges or closes.
 # A receipt is intentionally independent of .hb-surfaced-* bookkeeping.
 #
 # New fm-terminal-outcome.v1 receipts contain schema, fingerprint, task_id,
@@ -91,6 +95,7 @@ export LC_ALL=C
 SCRIPT_DIR="$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 OUTCOME_DIR="$STATE/terminal-outcomes"
 SCAN_MARKER="$STATE/.inactive-outcome-reconcile"
 SCAN_LOCK="$STATE/.inactive-outcome-reconcile.lock"
@@ -106,6 +111,8 @@ CREW_STATE_BIN="${FM_INACTIVE_CREW_STATE_BIN:-$SCRIPT_DIR/fm-crew-state.sh}"
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
+# shellcheck source=bin/fm-routine-pr-lib.sh
+. "$SCRIPT_DIR/fm-routine-pr-lib.sh"
 
 FM_INACTIVE_RECONCILE_SECS=${FM_INACTIVE_RECONCILE_SECS:-900}
 case "$FM_INACTIVE_RECONCILE_SECS" in
@@ -548,6 +555,13 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
     return 0
   fi
   record_phase_set "$RECORD_PENDING" presentation || return 1
+  # A done ship whose only news is its parked PR is presented by the captain's
+  # own PR view under the routine PR outcomes opt-in, so no wake is queued.
+  if [ "$state" = 'done' ] && [ -n "$pr" ] && fm_routine_pr_outcomes_enabled "$CONFIG" \
+    && fm_routine_pr_task_parked "$STATE" "$id" "$pr"; then
+    acknowledge "$fingerprint" || return 1
+    return 0
+  fi
   payload="inactive terminal outcome awaiting captain presentation: child=$id state=$state"
   [ -z "$pr" ] || payload="$payload pr=$pr"
   queue_presentation "$RECORD_PENDING" "$fingerprint" "$payload" || true

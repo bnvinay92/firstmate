@@ -141,6 +141,15 @@ export interface UnreadWakeScope {
    * non-heartbeat wake claims it in the away posture.
    */
   heartbeatSeqs: string[];
+  /**
+   * The merge-landed check rows included in eligibleSeqs because the attended
+   * supervision host runs under the routine PR outcomes opt-in
+   * (docs/configuration.md "Routine PR outcomes"). Each is scoped to the task
+   * it names, so unlike checkSeqs it leaves the claim scoped by task.
+   */
+  routinePrSeqs: string[];
+  /** The check rows this scan left queued for main. */
+  mainCheckSeqs: string[];
   taskByWakeKey: Record<string, string>;
 }
 
@@ -154,6 +163,8 @@ const EMPTY_SCOPE: UnreadWakeScope = {
   needsDecisionKeys: [],
   checkSeqs: [],
   heartbeatSeqs: [],
+  routinePrSeqs: [],
+  mainCheckSeqs: [],
   taskByWakeKey: {},
 };
 const UNSAFE_SCOPE: UnreadWakeScope = {
@@ -166,6 +177,8 @@ const UNSAFE_SCOPE: UnreadWakeScope = {
   needsDecisionKeys: [],
   checkSeqs: [],
   heartbeatSeqs: [],
+  routinePrSeqs: [],
+  mainCheckSeqs: [],
   taskByWakeKey: {},
 };
 
@@ -212,6 +225,16 @@ const UNSAFE_SCOPE: UnreadWakeScope = {
 // the branch on whatever wake finds them unread. The two vetoes that describe
 // a broken queue rather than a routing choice - an unresolvable task-local row
 // and a structurally invalid or unknown row - stay vetoes in both postures.
+//
+// `routinePrOutcomes` is set only by the attended supervision host while the
+// home opts into routine PR outcomes (bin/fm-routine-pr-lib.sh owns the gate).
+// It moves exactly one check class to the branch: a `check: merge landed:
+// <task> ...` row whose task still has a non-secondmate record, claimed scoped
+// to that task so the branch's ordinary landed cleanup runs without MAIN.
+// Every other check row stays main's, and a merge row whose task record is
+// already gone stays main's as before.
+const MERGE_LANDED_ROW = /^check: merge landed: ([A-Za-z0-9._-]+) /;
+
 function statusLineVerb(line: string): string {
   const beforeColon = line.split(":", 1)[0].split("[", 1)[0].trim();
   const words = beforeColon.split(/\s+/);
@@ -369,7 +392,13 @@ function spanIsDecisionOwned(
   return false;
 }
 
-export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = false, attendedHost = false): UnreadWakeScope {
+export function scopeForUnreadWake(
+  state: string,
+  heartbeat: boolean,
+  afk = false,
+  attendedHost = false,
+  routinePrOutcomes = false,
+): UnreadWakeScope {
   let queue = "";
   try {
     queue = readFileSync(`${state}/.wake-queue`, "utf8");
@@ -414,6 +443,8 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
   const needsDecisionKeys: string[] = [];
   const checkSeqs: string[] = [];
   const heartbeatSeqs: string[] = [];
+  const routinePrSeqs: string[] = [];
+  const mainCheckSeqs: string[] = [];
   const staleDecisionOwnership = new Map<string, boolean>();
   const resolveVerb = process.env.FM_CLASSIFY_RESOLVE_VERB || "resolved";
   const heldVerb = process.env.FM_CLASSIFY_CAPTAIN_HELD_VERB || "captain-held";
@@ -445,6 +476,18 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
       if (afk) {
         eligibleSeqs.push(seq);
         checkSeqs.push(seq);
+        continue;
+      }
+      const merged = routinePrOutcomes && attendedHost ? MERGE_LANDED_ROW.exec(fields[4] ?? "") : null;
+      const mergedTask = merged?.[1] ?? "";
+      const mergedProject = mergedTask && !secondmates.has(mergedTask) ? metadata.get(mergedTask) ?? "" : "";
+      if (mergedProject) {
+        projects.add(mergedProject);
+        eligibleTasks.add(mergedTask);
+        eligibleSeqs.push(seq);
+        routinePrSeqs.push(seq);
+      } else {
+        mainCheckSeqs.push(seq);
       }
       continue;
     }
@@ -564,6 +607,8 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
     needsDecisionKeys,
     checkSeqs,
     heartbeatSeqs,
+    routinePrSeqs,
+    mainCheckSeqs,
     taskByWakeKey: Object.fromEntries(taskByKey),
   };
 }
@@ -603,10 +648,21 @@ export interface BranchOfferVerdict {
 // The away posture collapses that partition: every actionable row is
 // branch-eligible and the trigger class no longer forces anything to main
 // (scopeForUnreadWake owns the per-row rule).
-export function branchOfferForWake(state: string, message: string, afk: boolean, attendedHost = false): BranchOfferVerdict {
+//
+// Under `routinePrOutcomes` on the attended host, a check trigger is offered
+// only when the scan claimed a merge-landed row and left no check row for
+// main, so the triggering check is necessarily one the branch may handle.
+export function branchOfferForWake(
+  state: string,
+  message: string,
+  afk: boolean,
+  attendedHost = false,
+  routinePrOutcomes = false,
+): BranchOfferVerdict {
   const heartbeat = /^heartbeat($|:)/.test(message);
-  const isCheckTrigger = /^check:/.test(message);
-  const scope = scopeForUnreadWake(state, heartbeat, afk, attendedHost && !afk);
+  const scope = scopeForUnreadWake(state, heartbeat, afk, attendedHost && !afk, routinePrOutcomes);
+  const isCheckTrigger = /^check:/.test(message)
+    && !(scope.routinePrSeqs.length > 0 && scope.mainCheckSeqs.length === 0);
   const triggerKeys = /^signal:/.test(message)
     ? message
       .slice("signal:".length)
