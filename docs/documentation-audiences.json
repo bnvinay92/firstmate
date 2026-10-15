@@ -374,6 +374,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/fleet-pane-mod.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/lint-option-a.md",
       "audience": "maintainer-verification"
     },
@@ -411,6 +415,10 @@
     },
     {
       "path": "docs/wedge-alarm.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "mods/fleet-pane/README.md",
       "audience": "operator-current"
     },
     {
