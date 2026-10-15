@@ -3,9 +3,10 @@ import type { Engine, MockClock } from 'claude-code/testing'
 import type { On, RenderElement } from 'claude-code'
 
 // An in-memory Firstmate home beneath the mod: its files, the commands it
-// runs and what they answer, and the panes it opens.
+// runs and what they answer, the panes it opens, and the session's $.state.
 type World = {
   files: Set<string>
+  state: Map<string, { value: unknown; version: number }>
   runs: { argv: readonly string[]; env: Record<string, string> | undefined }[]
   writes: string[]
   opened: { id: string; focus: boolean | undefined }[]
@@ -61,6 +62,7 @@ const GITHUB = { data: { p0: pr('Package axi for brew', 'OPEN', 'SUCCESS', null)
 function world(on: On, store: Record<string, unknown> = {}, files: string[] = [`${HOME}/state`, `${HOME}/bin/fm-fleet-snapshot.sh`]): World {
   const w: World = {
     files: new Set(files),
+    state: new Map(),
     runs: [],
     writes: [],
     opened: [],
@@ -75,9 +77,19 @@ function world(on: On, store: Record<string, unknown> = {}, files: string[] = [`
     w.writes.push(e.path)
     return { value: undefined }
   })
+  // The session's named values, held here so a /clear can start them over.
+  on('state.get', ($, e) => ({ value: w.state.get(`${e.plugin}/${e.key}`) ?? { value: undefined, version: 0 } }))
+  on('state.set', ($, e) => {
+    const name = `${e.plugin}/${e.key}`
+    const version = w.state.get(name)?.version ?? 0
+    if (e.ifVersion !== undefined && e.ifVersion !== version) return { value: { isSet: false, version } }
+    w.state.set(name, { value: e.value, version: version + 1 })
+    return { value: { isSet: true, version: version + 1 } }
+  })
   on('session.root', () => ({ value: HOME }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('turn.complete', () => ({ text: '' }))
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('process.run', ($, e) => {
     w.runs.push({ argv: e.argv, env: e.init?.env })
@@ -102,6 +114,14 @@ async function start($: Engine, w: World): Promise<void> {
   await w.clock.advance(20)
 }
 
+// A /clear: the session ends and the process goes on under a new one, whose
+// $.state starts empty and which raises no session.start.
+async function clear($: Engine, w: World): Promise<void> {
+  await $.session.end({ reason: 'clear', sessionId: 'before-clear', resume: { id: 'before-clear' } })
+  w.state = new Map()
+}
+
+const snapshotRuns = (w: World) => w.runs.filter(run => run.argv[0] !== 'gh').length
 const ghRuns = (w: World) => w.runs.filter(run => run.argv[0] === 'gh').length
 
 describe('the pane', () => {
@@ -159,6 +179,34 @@ describe('the pane', () => {
     const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
     expect((await pane.find({ type: 'Text', text: /axi: Package axi for brew/ })) !== undefined).toBe(true)
     expect((await pane.find({ type: 'Text', text: /could not be read just now/ })) !== undefined).toBe(true)
+  })
+
+  test('fills in again on its own after /clear', async ($, on) => {
+    const w = world(on)
+    await start($, w)
+    await clear($, w)
+    await w.clock.advance(20)
+    expect(snapshotRuns(w)).toBe(2)
+    const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect((await pane.find({ type: 'Text', text: /Open pull requests \(2\)/ })) !== undefined).toBe(true)
+    expect((await pane.find({ type: 'Text', text: /Decisions waiting for you \(2\)/ })) !== undefined).toBe(true)
+    await pane.unmount()
+
+    await w.clock.advance(60_000)
+    expect(snapshotRuns(w)).toBe(3)
+  })
+
+  test('/fleet-pane reads again at once after /clear', async ($, on) => {
+    const w = world(on)
+    await start($, w)
+    await clear($, w)
+    await w.clock.advance(20)
+    w.snapshot = { ...SNAPSHOT, backlog: { records: [] } }
+    await $.command.run({ command: 'fleet-pane', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 160 } })
+    await w.clock.advance(20)
+    expect(snapshotRuns(w)).toBe(3)
+    const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect((await pane.find({ type: 'Text', text: /Decisions waiting for you \(1\)/ })) !== undefined).toBe(true)
   })
 
   test('closed by hand stays closed until /fleet-pane', async ($, on) => {
