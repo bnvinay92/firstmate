@@ -418,6 +418,19 @@ test_inert_when_fleet_idle() {
 
 # --- the armed cycle ----------------------------------------------------------
 
+# A rewake opens a turn the captain did not write. Claude forces visible
+# output on a turn that ends silently, so a wake leaving nothing for the
+# captain ends with the one exact line "Captain, shipshape." and nothing else.
+# The banner must name only that line and never invite a summary of the wake,
+# which is what turned every routine wake into a captain-facing message.
+assert_wake_turn_names_only_shipshape() {  # <banner> <label>
+  assert_contains "$1" "opened by automatic supervision, not the captain" "$2 does not say the captain did not open the turn"
+  assert_contains "$1" 'end the turn with exactly "Captain, shipshape." and nothing else, never a summary of the wake' \
+    "$2 does not pin the exact no-news reply"
+  [ "$(printf '%s\n' "$1" | grep -o 'Captain, [^"]*' | sort -u)" = "Captain, shipshape." ] \
+    || fail "$2 names a reply other than exactly \"Captain, shipshape.\": $1"
+}
+
 test_actionable_close_rewakes_with_reason() {
   local dir out status
   dir=$(make_primary_dir "$TMP_ROOT/actionable")
@@ -429,6 +442,7 @@ test_actionable_close_rewakes_with_reason() {
   assert_contains "$out" "stale: fixture-win actionable" "rewake must carry the arm's reason line"
   assert_contains "$out" "bin/fm-wake-drain.sh" "rewake must direct the drain-first protocol"
   assert_contains "$out" "do NOT run bin/fm-watch-arm.sh" "rewake must forbid a duplicate model re-arm"
+  assert_wake_turn_names_only_shipshape "$out" "plain-arm rewake"
   [ "$(epoch_outcome "$dir")" = rewake ] || fail "epoch must record outcome=rewake, got: $(epoch_outcome "$dir")"
   [ "$(epoch_field "$dir" session_pid)" = "$(cat "$dir/state/.lock")" ] \
     || fail "rewake epoch must bind the lock-owning Claude session"
@@ -1536,7 +1550,7 @@ test_plain_arm_banner_keeps_its_wake_line_cap() {
   expected=$(
     printf 'firstmate watcher wake - one supervision event needs a handling turn now.\n'
     for i in 1 2 3 4 5 6 7 8; do printf 'stale: fixture-%s actionable\n' "$i"; done
-    printf 'Run bin/fm-wake-drain.sh first, handle the wake, then run its exact WAKE_ACK_REQUIRED --ack-through command. Until that post-handling acknowledgement, interruption leaves the wake durable for idempotent re-handling. This Stop hook owns watcher continuity: when the handling turn ends, the next needed cycle arms automatically - do NOT run bin/fm-watch-arm.sh after an ordinary wake.\n'
+    printf 'Run bin/fm-wake-drain.sh first, handle the wake, then run its exact WAKE_ACK_REQUIRED --ack-through command. Until that post-handling acknowledgement, interruption leaves the wake durable for idempotent re-handling. This Stop hook owns watcher continuity: when the handling turn ends, the next needed cycle arms automatically - do NOT run bin/fm-watch-arm.sh after an ordinary wake. This turn was opened by automatic supervision, not the captain: if handling leaves nothing for the captain, end the turn with exactly "Captain, shipshape." and nothing else, never a summary of the wake.\n'
   )
   [ "$out" = "$expected" ] || fail "the plain-arm rewake banner changed:"$'\n'"$out"
   pass "auto-arm: without the host the rewake banner is unchanged, eight wake lines at most"
@@ -1559,6 +1573,7 @@ test_host_handback_carries_every_host_line() {
     || fail "the rewake must carry every host line in the host's order:"$'\n'"$out"
   [ "$(printf '%s\n' "$out" | grep -c '^signal: ')" -eq 8 ] || fail "the host's wake lines must keep the eight-line cap:"$'\n'"$out"
   assert_contains "$out" "signal: fixture-8.status" "the first eight wake lines must reach the rewake"
+  assert_wake_turn_names_only_shipshape "$out" "supervision-host handback rewake"
   pass "auto-arm: a host handback delivers every host line, while its wake lines keep their cap"
 }
 

@@ -11,6 +11,9 @@
 # either a paused: external wait or a verified captain-held transfer, is the
 # separate idle absorb case and re-surfaces only on its long bounded cadence,
 # although its initial no-verb status signal still surfaces in normal mode.
+# A bare turn-end from a crew whose log already declares such a wait, or holds
+# a needs-decision it raised that is still open, adds nothing and is absorbed
+# (signal_turnend_declared_wait).
 # That cadence is hours long and condition-aware: a paused: line naming
 # `until <UTC ISO 8601>` is rechecked when that time passes, but a declared time
 # beyond FM_PAUSE_RESURFACE_SECS cannot extend the ordinary recheck cadence, and
@@ -32,7 +35,12 @@
 #                          human the wait is on. Only when neither absorb class
 #                          applies does the log's latest recognized status event decide:
 #                          terminal (captain-relevant) or non-terminal (no verb),
-#                          both surfaced at once. A provably-working stale past the
+#                          both surfaced at once, except that a log firstmate was
+#                          already shown, or one holding an open needs-decision the
+#                          crew raised, alarms once per status-log state and is then
+#                          rechecked on the long cadence instead of on every new pane
+#                          hash (surfaced_status_stale_bound,
+#                          surface_nonterminal_stale). A provably-working stale past the
 #                          wedge threshold also surfaces, with an "escalation N"
 #                          count in the reason; at FM_WEDGE_DEMAND_INSPECT_COUNT
 #                          consecutive escalations on the SAME pane, the reason
@@ -672,6 +680,38 @@ inbox_steer_check() {  # <window> <task>
 # begins a new quiet interval; retaining either would make the new interval
 # inherit the prior one. Reached only for a non-afk, no-captain-verb signal, so
 # it never runs on the ordinary per-wake path.
+# 0 (benign/absorb) when the batch is bare turn-end markers only and every
+# task's own status log already says it is waiting: a standing declared wait
+# (`paused:` or `captain-held`) or a `needs-decision` it raised that is still
+# open. Ending a turn adds nothing to a wait firstmate was already told about,
+# and each such ping otherwise opened a firstmate turn with nothing in it - a
+# worker serving a live review board ends a turn on every round. A status
+# append is authored content and returns 1, as does a secondmate (its turn-ends
+# keep the provably-working rule), an unresolvable task, and any task not
+# declaring such a wait. The stale backbone still rechecks the idle pane on the
+# declared-wait cadence, so a worker that stopped behind the wait is not lost.
+signal_turnend_declared_wait() {  # <file> ...
+  local f base dir task seen=''
+  for f in "$@"; do
+    base=${f##*/}
+    dir=${f%/*}
+    [ "$dir" != "$f" ] || dir=.
+    case "$base" in
+      *.turn-ended) task=${base%.turn-ended} ;;
+      *) return 1 ;;
+    esac
+    [ -n "$task" ] && [ -f "$dir/$task.meta" ] || return 1
+    [ "$(grep '^kind=' "$dir/$task.meta" 2>/dev/null | tail -1 | cut -d= -f2-)" != secondmate ] || return 1
+    if status_is_paused_or_captain_held "$(status_declared_wait_line "$dir/$task.status")" \
+      || status_own_open_needs_decision "$dir/$task.status"; then
+      seen=1
+      continue
+    fi
+    return 1
+  done
+  [ -n "$seen" ]
+}
+
 signal_turnend_panes_churned() {  # <file> ...
   [ -e "$CONFIG/turnend-churn-absorb" ] || return 1
   local f base task meta kind w key backend label terminal prev now since now_s absorb_secs marker age
@@ -1920,6 +1960,35 @@ captain_call_stale_bound() {  # <window-key> <task>
   stale_wait_throttled "$key" "$STALE_WAIT_DECLARATION"
 }
 
+# The same bound for every captain-relevant last line, with no backlog hold
+# needed: a worker whose log ends in `done`, `needs-decision`, `blocked`, or
+# `failed` has already told firstmate where it stands, and an idle pane whose
+# display ticks (a clock, a board refresh) changes hash without changing that.
+# The first sight of each distinct status-log signature still alarms; a new pane
+# hash with the identical log is absorbed until PAUSE_RESURFACE_SECS passes, and
+# any status append is a new signature that alarms at once. A captain call that
+# is open but not yet throttled keeps its own declaration and alarms.
+surfaced_status_stale_bound() {  # <window-key> <task>
+  [ -z "$STALE_WAIT_DECLARATION" ] || return 1
+  STALE_WAIT_DECLARATION="surfaced:$(fm_wake_signal_sig "$STATE/$2.status" || true)"
+  stale_wait_throttled "$1" "$STALE_WAIT_DECLARATION" || stale_wait_already_presented "$1" "$2"
+}
+
+# A status log whose every captain-relevant event firstmate has already been
+# shown (the .hb-surfaced- position mark_surfaced records) gave this declaration
+# its first sight already, through the signal path, so a stale alarm right after
+# would only repeat it. Starts the declaration's PAUSE_RESURFACE_SECS window
+# instead and answers 0. Answers 1, alarming, when an event is still unshown,
+# the log cannot be classified, or the window already ran for this declaration,
+# which is the long-cadence recheck.
+stale_wait_already_presented() {  # <window-key> <task>
+  [ "$(cat "$STATE/.paused-resurfaced-$1" 2>/dev/null || true)" != "$STALE_WAIT_DECLARATION" ] || return 1
+  # Exit 1 is "no captain-relevant event past that position"; 0 and 2 alarm.
+  status_span_first_actionable_record "$STATE/$2.status" "$(hb_surfaced_offset "$2")" >/dev/null
+  [ "$?" -eq 1 ] || return 1
+  stale_wait_record "$1"
+}
+
 # Surface a stale pane no classifier could resolve, so firstmate inspects it: it
 # may have finished through an interactive menu that wrote no status, be waiting on
 # a decision, or be wedged. pause_state_class deliberately answers `none` for a
@@ -1974,6 +2043,15 @@ surface_nonterminal_stale() {  # <window> <hash> [dialog-name]
     throttled=0
   elif [ -n "$STALE_WAIT_DECLARATION" ]; then
     bounded=0
+  elif status_own_open_needs_decision "$STATE/$task.status"; then
+    # The task's own unanswered question is a wait on firstmate, already
+    # surfaced when it was asked, even after later routine lines.
+    bounded=0
+    STALE_WAIT_DECLARATION="decision:$(fm_wake_signal_sig "$STATE/$task.status" || true)"
+    if stale_wait_throttled "$key" "$STALE_WAIT_DECLARATION" \
+      || stale_wait_already_presented "$key" "$task"; then
+      throttled=0
+    fi
   fi
   if [ "$throttled" -ne 0 ]; then
     reason=$(stale_reason_naming_dialog "stale: $win" "$dialog")
@@ -3007,7 +3085,8 @@ EOF
     # bin/fm-supervise-daemon.sh).
     # shellcheck disable=SC2086  # same space-separated status-path list
     if afk_present || [ "$signal_actionable" -eq 0 ] \
-      || { ! signal_crew_provably_working $files && ! signal_turnend_panes_churned $files; }; then
+      || { ! signal_crew_provably_working $files && ! signal_turnend_panes_churned $files \
+        && ! signal_turnend_declared_wait $files; }; then
       while IFS=$(printf '\t') read -r sf sig f; do
         [ -n "$sf" ] || continue
         file_reason="$reason"
@@ -3160,7 +3239,7 @@ EOF
               date +%s > "$ssf"
               clear_write_tracking "$key"
               triage_log "absorbed stale (provably working, overriding a stale captain-relevant status): $w"
-            elif captain_call_stale_bound "$key" "$task"; then
+            elif captain_call_stale_bound "$key" "$task" || surfaced_status_stale_bound "$key" "$task"; then
               # The line is captain-relevant and stays so, but the backlog says
               # the captain already holds this work: further NEW pane hashes with
               # the same status-log state have nothing to add while they are
