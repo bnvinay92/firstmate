@@ -199,6 +199,56 @@ describe('the review pane', () => {
   })
 })
 
+// The colours a pane run may name: theme keys that follow the theme in force,
+// as the pane's own background does.
+const THEME_TEXT = new Set(['text', 'inactive', 'suggestion'])
+const LONG_ENTRY = `- ${'the captain approves each stow entry only after reading it whole, '.repeat(6)}end`
+
+async function openReview($: Engine, w: World, review: unknown): Promise<void> {
+  w.tokens = 250_000
+  await $.session.start({ cwd: HOME, surface: 'terminal', isInteractive: true })
+  await turnEnds($, w)
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await band.press({ key: 'stow' })
+  await w.clock.advance(20)
+  w.files.set(`${HOME}/state/stow-review.json`, JSON.stringify(review))
+  w.mtimes.set(`${HOME}/state/stow-review.json`, w.clock.now())
+  await turnEnds($, w)
+}
+
+describe('the review pane under any theme', () => {
+  test('every run names a theme colour over a theme background, and no Button keeps default brackets', async ($, on) => {
+    const w = world(on, firstmateHome())
+    await openReview($, w, { ...REVIEW, exceptions: [{ home: 'mate-b', reason: 'no plan' }] })
+    const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await pane.drawn()).toMatchObject({ type: 'Box', props: { backgroundColor: 'composerSidebarBackground' } })
+    const texts = await pane.findAll({ type: 'Text' })
+    expect(texts.length).toBeGreaterThan(10)
+    for (const text of texts) {
+      expect({ text: text.text, color: THEME_TEXT.has(String(text.props.color)) }).toEqual({ text: text.text, color: true })
+      expect({ text: text.text, dimColor: text.props.dimColor }).toEqual({ text: text.text, dimColor: undefined })
+    }
+    const buttons = await pane.findAll({ type: 'Button' })
+    expect(buttons.map(button => button.key)).toEqual(expect.arrayContaining(['all', 'none', 'auto', 'save', 'cancel']))
+    for (const button of buttons) expect({ key: button.key, plain: button.props.plain }).toEqual({ key: button.key, plain: true })
+    expect((await pane.find({ key: 'save' }))?.text).toContain('[ Save ]')
+  })
+
+  test('a long entry is drawn whole, and still ticks and edits', async ($, on) => {
+    const w = world(on, firstmateHome())
+    const long = { version: 1, homes: [{ home: 'main', items: [{ id: 'l1', section: 'knowledge', action: 'add', target: 'data/captain.md', entry: LONG_ENTRY }] }] }
+    await openReview($, w, long)
+    const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    const full = await pane.find({ type: 'Text', text: /reading it whole, end/ })
+    expect(full?.text.replace(/\s+/g, ' ').trim()).toBe(LONG_ENTRY)
+    expect(full?.props.wrap).toBe('wrap')
+    await pane.press({ key: 'tick:main/l1' })
+    expect((await pane.find({ key: 'tick:main/l1' }))?.text).toContain('[ ]')
+    await pane.input({ key: 'entry:main/l1', text: '- short now', kind: 'change' })
+    expect(await pane.find({ type: 'Text', text: /reading it whole/ })).toBeUndefined()
+  })
+})
+
 describe('Auto and clearing', () => {
   test('Auto stows a crossing home once, shows what it saved, then clears', async ($, on) => {
     const w = world(on, firstmateHome(), { auto: true })

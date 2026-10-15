@@ -1,10 +1,12 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import type { StowReview } from '../types'
+import type { StowItem, StowReview } from '../types'
 import {
   approvedReview,
   crossings,
   draftArgs,
+  isEntryCut,
+  itemHeight,
   pageOf,
   parseReading,
   parseRegistry,
@@ -55,6 +57,21 @@ describe('the review layout', () => {
     expect(second[0]).toMatchObject({ kind: 'home' })
     expect(second.some(row => row.kind === 'item')).toBe(true)
     expect(pageOf(reviewRows(REVIEW), 100, 0).pages).toBe(1)
+  })
+
+  test('a long entry counts every row its wrapped full text takes', async () => {
+    const short: StowItem = { id: 's', section: 'memory', action: 'add', target: 't', entry: '- short' }
+    const long: StowItem = { ...short, id: 'l', entry: `- ${'word '.repeat(60)}` }
+    expect(isEntryCut(short.entry, short.action, 80)).toBe(false)
+    expect(isEntryCut(long.entry, long.action, 80)).toBe(true)
+    expect(isEntryCut('- one\n- two', 'add', 80)).toBe(true)
+    expect(itemHeight(short, 80)).toBe(1)
+    // Its row, then 302 characters wrapped at 74 columns.
+    expect(itemHeight(long, 80)).toBe(1 + 5)
+    const tall: StowReview = { version: 1, homes: [{ home: 'main', items: [long, short] }] }
+    const heightOf = (row: ReturnType<typeof reviewRows>[number]) => (row.kind === 'item' ? itemHeight(row.item, 80) : 1)
+    expect(pageOf(reviewRows(tall), 9, 0).pages).toBe(1)
+    expect(pageOf(reviewRows(tall), 9, 0, heightOf).pages).toBe(2)
   })
 })
 
