@@ -1,11 +1,12 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
-import type { StowApplied, StowReading, StowReview, StowRound, StowSite } from '../types'
+import type { StowApplied, StowItem, StowReading, StowReview, StowRound, StowSite } from '../types'
 import {
   APPLIED_FILE,
   APPROVED_FILE,
   CONTEXT_FILE,
+  ENTRY_INDENT,
   REFRESH_MS,
   REGISTRY_FILE,
   REVIEW_FILE,
@@ -19,7 +20,9 @@ import {
   crossings,
   draftArgs,
   formatTokens,
+  isEntryCut,
   isOver,
+  itemHeight,
   keyOf,
   pageOf,
   parseApplied,
@@ -28,12 +31,21 @@ import {
   parseReview,
   reviewRows,
 } from './lib'
+import type { ReviewRow } from './lib'
 
 type Engine = EngineInterface
 
 const PANE = 'stow-review'
 const TICK_MS = 30 * 1000
 const PUBLISH_MIN_MS = 30 * 1000
+
+// The pane's colours, every one a theme key so it follows the theme in force:
+// a run left uncoloured takes the terminal's default foreground instead,
+// which a dark theme in a light terminal draws dark on the pane's dark grey.
+const TEXT = 'text'
+const MUTED = 'inactive'
+const PRIMARY = 'suggestion'
+const BACKGROUND = 'composerSidebarBackground'
 
 const site = atom({ plugin: 'stow-review', key: 'site' } as const, null)
 const readings = atom({ plugin: 'stow-review', key: 'readings' } as const, [])
@@ -342,82 +354,126 @@ export const register: Register = (on, options) => {
     const loaded = await read($, review)
     const auto = await read($, isAuto)
     const room = (e.viewport?.rows ?? 30) - 8
-    const footer = [
-      <Button key="auto" onPress={() => toggleAuto($)}>
-        {auto ? 'Auto: on' : 'Auto: off'}
-      </Button>,
-    ]
+    const columns = e.props.bodyColumns
+    const isTerminal = e.surface === 'terminal'
+    // A terminal Button's own brackets keep the terminal's default colour, so
+    // the terminal gets a plain Button whose brackets are text of the theme's.
+    const action = (key: string, label: string, onPress: () => unknown, look?: 'primary' | 'dismiss') =>
+      isTerminal ? (
+        <Button key={key} plain onPress={onPress}>
+          <Text color={look === 'primary' ? PRIMARY : TEXT} bold={look === 'primary'}>
+            [ {label} ]
+          </Text>
+        </Button>
+      ) : (
+        <Button
+          key={key}
+          variant={look === 'primary' ? 'primary' : undefined}
+          role={look === 'dismiss' ? 'dismiss' : undefined}
+          onPress={onPress}
+        >
+          {label}
+        </Button>
+      )
+    const heading = (row: ReviewRow) =>
+      row.kind === 'home' ? (
+        <Text bold color={TEXT}>
+          Home: {row.home}
+        </Text>
+      ) : row.kind === 'section' ? (
+        <Text color={TEXT}>  {SECTION_LABELS[row.section]}</Text>
+      ) : row.kind === 'target' ? (
+        <Text color={MUTED}>    {row.target}</Text>
+      ) : null
+    // The entry in full beneath its row, when the field beside the tick would cut it.
+    const fullText = (entry: string, kind: string) =>
+      isEntryCut(entry, kind, columns) ? (
+        <Text color={TEXT} wrap="wrap">
+          {entry
+            .split('\n')
+            .map(line => ENTRY_INDENT + line)
+            .join('\n')}
+        </Text>
+      ) : null
+    // The pane body names its background with its colours: a theme pair, so
+    // the text reads under whichever theme is in force, inline or docked.
+    const pane = (...children: RenderChildren[]) => (
+      <Box flexDirection="column" backgroundColor={BACKGROUND}>
+        {children}
+      </Box>
+    )
+    const footer = [action('auto', auto ? 'Auto: on' : 'Auto: off', () => toggleAuto($))]
 
     if (loaded === null) {
       const last = await read($, lastAuto)
       if (last === null) {
-        return (
-          <Box flexDirection="column">
-            <Text key="empty" dimColor>No stow plan to review.</Text>
-            <Box flexDirection="row" gap={1}>
-              {footer}
-              <Button key="close" role="dismiss" onPress={() => closePane($)}>
-                Close
-              </Button>
-            </Box>
-          </Box>
-        )
-      }
-      const shown = pageOf(reviewRows({ version: 1, homes: last.homes }), room, 0)
-      return (
-        <Box flexDirection="column">
-          <Text key="last" bold>Last automatic stow: {appliedSummary(last)}</Text>
-          {shown.rows.map(row =>
-            row.kind === 'home' ? (
-              <Text bold>Home: {row.home}</Text>
-            ) : row.kind === 'section' ? (
-              <Text>  {SECTION_LABELS[row.section]}</Text>
-            ) : row.kind === 'target' ? (
-              <Text dimColor>    {row.target}</Text>
-            ) : (
-              <Text>      [{row.item.action}] {row.item.entry}</Text>
-            ),
-          )}
+        return pane(
+          <Text key="empty" color={MUTED}>
+            No stow plan to review.
+          </Text>,
           <Box flexDirection="row" gap={1}>
             {footer}
-            <Button key="close" role="dismiss" onPress={() => closePane($)}>
-              Close
-            </Button>
-          </Box>
-        </Box>
+            {action('close', 'Close', () => closePane($), 'dismiss')}
+          </Box>,
+        )
+      }
+      const shown = pageOf(reviewRows({ version: 1, homes: last.homes }), room, 0, row =>
+        row.kind === 'item' ? itemHeight(row.item, columns) : 1,
+      )
+      return pane(
+        <Text key="last" bold color={TEXT}>
+          Last automatic stow: {appliedSummary(last)}
+        </Text>,
+        shown.rows.map(row =>
+          row.kind === 'item' ? (
+            <Text color={TEXT} wrap="wrap">
+              {'      '}[{row.item.action}] {row.item.entry}
+            </Text>
+          ) : (
+            heading(row)
+          ),
+        ),
+        <Box flexDirection="row" gap={1}>
+          {footer}
+          {action('close', 'Close', () => closePane($), 'dismiss')}
+        </Box>,
       )
     }
 
     const tickMap = await read($, ticks)
     const editMap = await read($, edits)
-    const shown = pageOf(reviewRows(loaded), room, await read($, page))
+    const entryOf = (home: string, item: StowItem) => editMap[keyOf(home, item.id)] ?? item.entry
+    const shown = pageOf(reviewRows(loaded), room, await read($, page), row =>
+      row.kind === 'item' ? itemHeight(row.item, columns, entryOf(row.home, row.item)) : 1,
+    )
     const at = Math.min(await read($, page), shown.pages - 1)
     const total = countItems(loaded)
     const kept = total - Object.values(tickMap).filter(value => value === false).length
 
-    return (
-      <Box flexDirection="column">
-        <Text key="hint" dimColor>
-          {kept} of {total} items ticked. Untick what should not be saved; edit a line to change its wording.
-        </Text>
-        {shown.rows.map(row => {
-          if (row.kind === 'home') return <Text bold>Home: {row.home}</Text>
-          if (row.kind === 'section') return <Text>  {SECTION_LABELS[row.section]}</Text>
-          if (row.kind === 'target') return <Text dimColor>    {row.target}</Text>
-          const key = keyOf(row.home, row.item.id)
-          return (
+    return pane(
+      <Text key="hint" color={MUTED}>
+        {kept} of {total} items ticked. Untick what should not be saved; edit a line to change its wording.
+      </Text>,
+      shown.rows.map(row => {
+        if (row.kind !== 'item') return heading(row)
+        const key = keyOf(row.home, row.item.id)
+        const entry = entryOf(row.home, row.item)
+        return (
+          <Box key={`item:${key}`} flexDirection="column">
             <Box key={`row:${key}`} flexDirection="row" gap={1}>
-              <Text>     </Text>
+              <Text color={TEXT}>     </Text>
               <Button key={`tick:${key}`} plain onPress={() => toggleItem($, key)}>
-                {tickMap[key] === false ? '[ ]' : '[x]'}
+                <Text color={TEXT}>{tickMap[key] === false ? '[ ]' : '[x]'}</Text>
               </Button>
-              <Text dimColor>{row.item.action}</Text>
+              <Text color={MUTED}>{row.item.action}</Text>
               {row.item.action === 'remove' ? (
-                <Text>{row.item.entry}</Text>
+                <Text color={TEXT} wrap="truncate-end">
+                  {row.item.entry}
+                </Text>
               ) : (
                 <Input
                   key={`entry:${key}`}
-                  value={editMap[key] ?? row.item.entry}
+                  value={entry}
                   submitLabel="keep"
                   onInput={(value: string) => {
                     void editItem($, key, value)
@@ -428,44 +484,29 @@ export const register: Register = (on, options) => {
                 />
               )}
             </Box>
-          )
-        })}
-        {(loaded.exceptions ?? []).map(one => (
-          <Text dimColor>
-            Not reviewable: {one.home} - {one.reason}
+            {fullText(entry, row.item.action)}
+          </Box>
+        )
+      }),
+      (loaded.exceptions ?? []).map(one => (
+        <Text color={MUTED}>
+          Not reviewable: {one.home} - {one.reason}
+        </Text>
+      )),
+      <Box flexDirection="row" gap={1}>
+        {shown.pages > 1 && action('prev', 'Prev', () => turnPage($, -1, shown.pages))}
+        {shown.pages > 1 && (
+          <Text color={MUTED}>
+            page {at + 1}/{shown.pages}
           </Text>
-        ))}
-        <Box flexDirection="row" gap={1}>
-          {shown.pages > 1 && (
-            <Button key="prev" onPress={() => turnPage($, -1, shown.pages)}>
-              Prev
-            </Button>
-          )}
-          {shown.pages > 1 && (
-            <Text dimColor>
-              page {at + 1}/{shown.pages}
-            </Text>
-          )}
-          {shown.pages > 1 && (
-            <Button key="next" onPress={() => turnPage($, 1, shown.pages)}>
-              Next
-            </Button>
-          )}
-          <Button key="all" onPress={() => tickAll($, loaded, true)}>
-            All
-          </Button>
-          <Button key="none" onPress={() => tickAll($, loaded, false)}>
-            None
-          </Button>
-          {footer}
-          <Button key="save" variant="primary" onPress={() => save($)}>
-            Save
-          </Button>
-          <Button key="cancel" onPress={() => cancel($)}>
-            Cancel
-          </Button>
-        </Box>
-      </Box>
+        )}
+        {shown.pages > 1 && action('next', 'Next', () => turnPage($, 1, shown.pages))}
+        {action('all', 'All', () => tickAll($, loaded, true))}
+        {action('none', 'None', () => tickAll($, loaded, false))}
+        {footer}
+        {action('save', 'Save', () => save($), 'primary')}
+        {action('cancel', 'Cancel', () => cancel($))}
+      </Box>,
     )
   })
 }

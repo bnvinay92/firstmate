@@ -157,25 +157,60 @@ export function countItems(review: StowReview): number {
   return review.homes.reduce((sum, plan) => sum + plan.items.length, 0)
 }
 
-// Pages of at most `room` rows; a page never starts with a lone heading that
-// has none of its items under it, because headings are repeated per page.
-export function pageOf(rows: readonly ReviewRow[], room: number, page: number): { rows: ReviewRow[]; pages: number } {
+// Columns an item row spends before its entry: the indent, the tick, the
+// action, the gaps between them and the field's own `keep` label.
+const ROW_LEAD = 18
+// The indent of an entry's full text, drawn beneath its row.
+export const ENTRY_INDENT = '      '
+
+// Whether an entry needs its full text drawn beneath its row: it holds a
+// line break, or it is wider than the field beside the tick, which cuts it.
+export function isEntryCut(entry: string, action: string, columns: number): boolean {
+  return entry.includes('\n') || entry.length > columns - ROW_LEAD - action.length
+}
+
+// Screen rows an item takes at `columns`: its own, plus its full text
+// wrapped beneath it when the field would cut it.
+export function itemHeight(item: StowItem, columns: number, entry = item.entry): number {
+  if (!isEntryCut(entry, item.action, columns)) return 1
+  const width = Math.max(1, columns - ENTRY_INDENT.length)
+  return 1 + entry.split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / width)), 0)
+}
+
+// Pages of at most `room` screen rows, an item counting `heightOf` rows; a
+// page never starts with a lone heading that has none of its items under it,
+// because headings are repeated per page. An item taller than a page still
+// gets a page of its own.
+export function pageOf(
+  rows: readonly ReviewRow[],
+  room: number,
+  page: number,
+  heightOf: (row: ReviewRow) => number = () => 1,
+): { rows: ReviewRow[]; pages: number } {
   const size = Math.max(4, room)
   const pages: ReviewRow[][] = []
   let current: ReviewRow[] = []
   let heads: ReviewRow[] = []
+  let used = 0
   for (const row of rows) {
     if (row.kind !== 'item') {
       heads = row.kind === 'home' ? [row] : row.kind === 'section' ? [heads[0] ?? row, row] : [...heads.slice(0, 2), row]
       continue
     }
-    if (current.length === 0 || current.length >= size) {
+    const height = heightOf(row)
+    if (current.length === 0 || used + height > size) {
       if (current.length > 0) pages.push(current)
       current = [...heads]
+      used = heads.length
     } else {
-      for (const head of heads) if (!current.includes(head)) current.push(head)
+      for (const head of heads) {
+        if (current.includes(head)) continue
+        current.push(head)
+        used += 1
+      }
     }
     current.push(row)
+    used += height
   }
   if (current.length > 0) pages.push(current)
   const total = Math.max(1, pages.length)
