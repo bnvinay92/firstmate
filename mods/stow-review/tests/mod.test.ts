@@ -29,7 +29,15 @@ const PANE = {
   props: { title: 'Stow review', isFocused: true, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
 } as const
 
-function world(on: On, files: Record<string, string>, store: Record<string, unknown> = {}): World {
+// The plugin store, kept by the test when several sessions must share it.
+type Store = Map<string, unknown>
+
+function world(
+  on: On,
+  files: Record<string, string>,
+  store: Record<string, unknown> | Store = {},
+  { root = HOME, now = 1_000_000 }: { root?: string; now?: number } = {},
+): World {
   const w: World = {
     files: new Map(Object.entries(files)),
     mtimes: new Map(),
@@ -37,9 +45,15 @@ function world(on: On, files: Record<string, string>, store: Record<string, unkn
     toasts: [],
     opened: [],
     tokens: 10_000,
-    clock: mock.clock(on, { now: 1_000_000 }),
+    clock: mock.clock(on, { now }),
   }
-  mock.store(on, store)
+  if (store instanceof Map) {
+    on('store.get', ($, e) => ({ value: store.get(e.key) }))
+    on('store.set', ($, e) => {
+      store.set(e.key, e.value)
+      return { value: undefined }
+    })
+  } else mock.store(on, store)
   mock.env(on, {})
   on('fs.exists', ($, e) => ({ value: w.files.has(e.path) }))
   on('fs.read', ($, e) => ({ value: w.files.get(e.path) ?? '' }))
@@ -49,7 +63,7 @@ function world(on: On, files: Record<string, string>, store: Record<string, unkn
     return { value: undefined }
   })
   on('fs.stat', ($, e) => ({ value: { kind: 'file', size: 0, mtimeMs: w.mtimes.get(e.path) ?? 0, isLink: false } }))
-  on('session.root', () => ({ value: HOME }))
+  on('session.root', () => ({ value: root }))
   on('session.usage', () => ({
     value: { startedAt: 0, context: { tokens: w.tokens, window: 1_000_000 }, rateLimits: [] },
   }))
@@ -77,9 +91,9 @@ function world(on: On, files: Record<string, string>, store: Record<string, unkn
   return w
 }
 
-const firstmateHome = (extra: Record<string, string> = {}): Record<string, string> => ({
-  [`${HOME}/state`]: '',
-  [`${HOME}/bin/fm-stow-plan.sh`]: '',
+const firstmateHome = (extra: Record<string, string> = {}, root = HOME): Record<string, string> => ({
+  [`${root}/state`]: '',
+  [`${root}/bin/fm-stow-plan.sh`]: '',
   ...extra,
 })
 
@@ -343,10 +357,54 @@ describe('Auto and clearing', () => {
     const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
     expect(await band.find({ key: 'stow:mate-a' })).toBeUndefined()
 
-    w.files.set(`${HOME}/state/stow-applied.json`, JSON.stringify({ version: 1, at: 42, clear: true, homes: [] }))
+    w.files.set(`${HOME}/state/stow-applied.json`, JSON.stringify({ version: 1, at: Math.floor(w.clock.now() / 1000), clear: true, homes: [] }))
     await turnEnds($, w)
     await turnEnds($, w)
     expect(w.commands).toEqual(['clear'])
+  })
+
+  test('a cleared session publishes an empty reading at once, so main stops offering it', async ($, on) => {
+    const w = world(on, {
+      [`${HOME}/state`]: '',
+      [`${HOME}/bin/fm-stow-plan.sh`]: '',
+      [`${HOME}/.fm-secondmate-home`]: 'mate-a',
+    })
+    w.tokens = 434_000
+    await $.session.start({ cwd: HOME, surface: 'terminal', isInteractive: true })
+    await turnEnds($, w)
+    expect(JSON.parse(w.files.get(`${HOME}/state/stow-context.json`) ?? '{}').tokens).toBe(434_000)
+    w.files.set(`${HOME}/state/stow-applied.json`, JSON.stringify({ version: 1, at: Math.floor(w.clock.now() / 1000), clear: true, homes: [] }))
+    await turnEnds($, w)
+    expect(w.commands).toEqual(['clear'])
+    const published = JSON.parse(w.files.get(`${HOME}/state/stow-context.json`) ?? '{}')
+    expect({ tokens: published.tokens, at: published.at }).toEqual({ tokens: 0, at: w.clock.now() - 500 })
+  })
+
+  test('the main band drops a cleared secondmate on its next tick', async ($, on) => {
+    const w = world(
+      on,
+      firstmateHome({
+        [`${HOME}/data/secondmates.md`]: `- mate-a - rides (home: ${MATE}; scope: rides; projects: a; added 2026-08-07)\n`,
+        [`${MATE}/state/stow-context.json`]: reading(434_000, 1_000_000),
+      }),
+    )
+    await $.session.start({ cwd: HOME, surface: 'terminal', isInteractive: true })
+    await turnEnds($, w)
+    const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    expect((await band.find({ key: 'stow:mate-a' }))?.text).toContain('Stow mate-a (434k)')
+    // The secondmate's session cleared and published its empty reading.
+    w.files.set(`${MATE}/state/stow-context.json`, reading(0, w.clock.now()))
+    await w.clock.advance(30_000)
+    expect(await band.find({ key: 'stow:mate-a' })).toBeUndefined()
+  })
+
+  test('a round end older than a few minutes never clears', async ($, on) => {
+    const w = world(on, firstmateHome())
+    w.files.set(`${HOME}/state/stow-applied.json`, JSON.stringify({ version: 1, at: Math.floor(w.clock.now() / 1000) - 6 * 60, clear: true, homes: [] }))
+    await $.session.start({ cwd: HOME, surface: 'terminal', isInteractive: true })
+    await turnEnds($, w)
+    await w.clock.advance(60_000)
+    expect(w.commands).toEqual([])
   })
 
   test('a round end that does not ask for a clear leaves the session alone', async ($, on) => {
@@ -354,5 +412,47 @@ describe('Auto and clearing', () => {
     await $.session.start({ cwd: HOME, surface: 'terminal', isInteractive: true })
     await turnEnds($, w)
     expect(w.commands).toEqual([])
+  })
+})
+
+// Every session that runs the mod shares one plugin store, in whichever home
+// it runs. A test has one session, so the homes take turns in order: each
+// session runs while the other home's session keeps writing everything it
+// wrote to the store back over it on every tick, as a live session would.
+describe('two homes sharing one store', () => {
+  const store: Store = new Map()
+  const wrote: Record<string, Store> = {}
+  const MAIN_AT = 1792155314
+  const MATE_AT = 1792154833
+
+  async function runHome($: Engine, on: On, name: string, rival: string | undefined): Promise<string[]> {
+    const root = name === 'main' ? HOME : MATE
+    const at = name === 'main' ? MAIN_AT : MATE_AT
+    const marker: Record<string, string> = name === 'main' ? {} : { [`${MATE}/.fm-secondmate-home`]: name }
+    const own: Store = new Map()
+    const w = world(on, firstmateHome(marker, root), store, { root, now: at * 1000 + 5_000 })
+    w.files.set(`${root}/state/stow-applied.json`, JSON.stringify({ version: 1, at, clear: true, homes: [] }))
+    const before = new Map(store)
+    await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
+    for (let i = 0; i < 8; i++) {
+      for (const [key, value] of wrote[rival ?? ''] ?? []) store.set(key, value)
+      await turnEnds($, w)
+      await w.clock.advance(30_000)
+    }
+    for (const [key, value] of store) if (before.get(key) !== value) own.set(key, value)
+    wrote[name] = own
+    return w.commands
+  }
+
+  test('the secondmate clears once', async ($, on) => {
+    expect(await runHome($, on, 'mate-a', undefined)).toEqual(['clear'])
+  })
+
+  test('main clears once while the secondmate keeps writing its store values', async ($, on) => {
+    expect(await runHome($, on, 'main', 'mate-a')).toEqual(['clear'])
+  })
+
+  test('the secondmate is not cleared again while main keeps writing its store values', async ($, on) => {
+    expect(await runHome($, on, 'mate-a', 'main')).toEqual([])
   })
 })

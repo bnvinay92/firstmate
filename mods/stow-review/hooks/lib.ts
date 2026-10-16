@@ -27,6 +27,15 @@ export const STALE_MS = 5 * 60 * 1000
 export const REFRESH_MS = 60 * 1000
 // A round that never ends (no plan, no apply) stops holding the band after this.
 export const ROUND_TIMEOUT_MS = 45 * 60 * 1000
+// A round end older than this never clears a session. Every session checks
+// its home's record on a 30-second timer, busy or idle, so a session that is
+// running sees its own round end long before then; an older record belongs to
+// a session that was not running the mod when the round ended.
+export const CLEAR_WINDOW_MS = 5 * 60 * 1000
+
+// The plugin store is one file shared by every session that runs the mod,
+// in every home, so a value that belongs to one home is keyed by that home.
+export const homeKey = (name: string, home: string): string => `${name}:${home}`
 
 export const SECTIONS: readonly StowSection[] = ['memory', 'offload', 'knowledge', 'records']
 
