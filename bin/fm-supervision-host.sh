@@ -1151,6 +1151,10 @@ while :; do
     if [ -n "$SUCCESSOR_GENERATION" ] \
       && ! fm_recovery_marker_publish "$STATE/.watcher-down" downtime >/dev/null 2>&1; then
       log_line "pass-through	downtime-unrestored	$(printf '%s\n' "$REASON" | head -n 1)"
+      # A failure, not a wake: the close would be undeliverable. Print it even
+      # when the first status line was already streamed, because no output at
+      # all reads as a dead host that the owner retries into a fresh park.
+      echo "watcher: FAILED - the supervision host could not restore watcher downtime for main's pass-through; the close stays queued for main"
       exit 1
     fi
     emit
