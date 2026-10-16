@@ -849,19 +849,19 @@ tests/fm-branch-supervision.test.sh
 
 ### Routine PR outcomes
 
-This supports [Routine PR outcomes](../configuration.md#routine-pr-outcomes-configroutine-pr-outcomes): under `config/routine-pr-outcomes` a parked pull request's ready line, a landed merge's completed cleanup, an inactive parked pull request, and a bodiless approval stay off main, and without the file each still reaches main.
+This supports [Routine PR outcomes](../configuration.md#routine-pr-outcomes-configroutine-pr-outcomes): under `config/routine-pr-outcomes` a parked pull request's ready line, a landed merge whose cleanup completed or whose task is still working, an inactive parked pull request, and a bodiless review in any state stay off main, and without the file each still reaches main.
 Every verdict here is a file, queue, or status-line fact the scripts read, with no harness-rendered signal, so the deterministic suites below are the proof; no live engine turn was run.
-It was measured on 2026-10-16 on macOS 26.6.2 arm64 with GNU bash 5.3.3 and Node 23.11.0, through the real host, watcher, report surface, outcome store, reconciler, and contribution poll, with a stub engine and a stand-in `gh`.
+It was measured on 2026-10-16, and re-run after the still-working, any-state review, and offer-reads-the-gate changes, on macOS 26.6.2 arm64 with GNU bash 5.3.3 and Node 23.11.0, through the real host, watcher, report surface, outcome store, reconciler, and contribution poll, with a stub engine and a stand-in `gh`.
 
 ```text
 $ tests/fm-supervision-host.test.sh
-ok - report surface: routine PR outcomes store only a parked PR's ready line and a completed merge cleanup as routine
-ok - dispatch entry: the routine PR outcomes opt-in moves only a recorded task's merge-landed check to the attended host
+ok - report surface: routine PR outcomes store only a parked PR's ready line, a completed merge cleanup, and a merge of a task still working as routine
+ok - dispatch entry: the offer reads the routine PR outcomes opt-in itself and moves only a recorded task's merge-landed check to the attended host
 ok - host: under the opt-in a parked PR's ready line and its merge-landed check stay off main, and without it they do not
 $ tests/fm-inactive-reconcile.test.sh
 ok - routine PR outcomes keep only a parked done ship's presentation off main
 $ tests/fm-contributions.test.sh
-ok - routine PR outcomes settle only bodiless approvals, and only when opted in
+ok - routine PR outcomes settle only bodiless reviews, in any state, and only when opted in
 ```
 
 Deterministic entry points:

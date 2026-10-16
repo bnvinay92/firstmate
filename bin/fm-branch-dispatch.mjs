@@ -21,14 +21,17 @@
 //                       task or on fleet is in scope
 //     --heartbeat marks a heartbeat wake; --afk applies the away-posture
 //     collapse (docs/pi-supervision-branch.md "Postures").
-//   fm-branch-dispatch.mjs offer [--afk] [--routine-pr-outcomes]
+//   fm-branch-dispatch.mjs offer [--afk]
 //     Read one actionable close's reason line from stdin and print
 //     branchOfferForWake's verdict: eligible=0|1 (whether the branch may take
 //     this close at all, trigger class included), then the same five lines
 //     `scope` prints for the scan it judged. --afk judges it under the away
-//     posture. --routine-pr-outcomes says the home opts into routine PR
-//     outcomes (docs/configuration.md "Routine PR outcomes"), so an attended
-//     scan may claim merge-landed check rows.
+//     posture. It reads the routine PR outcomes opt-in (docs/configuration.md
+//     "Routine PR outcomes") itself through bin/fm-routine-pr-lib.sh, which
+//     owns the gate, so a supervision host that started before an update
+//     still applies the current gate: when the home opts in, an attended scan
+//     may claim merge-landed check rows. A --routine-pr-outcomes flag, which
+//     such a host may still pass, is accepted and ignored.
 //   fm-branch-dispatch.mjs wake-prompt --report <surface> [--mirror-file <path>] [--away [--readback-file <path>]]
 //     Read the watcher's wake reason from stdin and print the branch wake
 //     prompt naming <surface> as the report surface. --mirror-file puts the
@@ -42,6 +45,7 @@
 // repository's own state/. Exit 0 on success, 2 on invalid use, 3 when a
 // wake-prompt --mirror-file cannot be read.
 
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -51,7 +55,7 @@ const dispatch = await import(pathToFileURL(path.join(root, ".pi", "extensions",
 
 function usage() {
   process.stderr.write(
-    "usage: fm-branch-dispatch.mjs scope [--heartbeat] [--afk] | offer [--afk] [--routine-pr-outcomes] | wake-prompt --report <surface> [--mirror-file <path>] [--away [--readback-file <path>]]\n",
+    "usage: fm-branch-dispatch.mjs scope [--heartbeat] [--afk] | offer [--afk] | wake-prompt --report <surface> [--mirror-file <path>] [--away [--readback-file <path>]]\n",
   );
   process.exit(2);
 }
@@ -71,6 +75,21 @@ function scopeLines(scope, heartbeat) {
     `tasks=${scope.eligibleTasks.join(" ")}\n` +
     `unscoped=${unscoped ? 1 : 0}\n`
   );
+}
+
+// bin/fm-routine-pr-lib.sh decides whether this home opts into routine PR
+// outcomes; any failure to ask it reads as not opted in, the behaviour before
+// the opt-in existed.
+function routinePrOutcomesEnabled() {
+  const home = process.env.FM_HOME || process.env.FM_ROOT_OVERRIDE || root;
+  const config = process.env.FM_CONFIG_OVERRIDE || path.join(home, "config");
+  const lib = path.join(root, "bin", "fm-routine-pr-lib.sh");
+  try {
+    execFileSync("bash", ["-c", '. "$1" && fm_routine_pr_outcomes_enabled "$2"', "_", lib, config], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function readOptional(file) {
@@ -95,14 +114,15 @@ if (command === "scope") {
   process.stdout.write(scopeLines(dispatch.scopeForUnreadWake(stateDir(), heartbeat, afk), heartbeat));
 } else if (command === "offer") {
   let afk = false;
-  let routinePr = false;
   for (const arg of args) {
     if (arg === "--afk") afk = true;
-    else if (arg === "--routine-pr-outcomes") routinePr = true;
+    // A host started before the opt-in moved here still passes this flag;
+    // accept it as a no-op so its offers keep working across the update.
+    else if (arg === "--routine-pr-outcomes") continue;
     else usage();
   }
   const message = readFileSync(0, "utf8").split(/\r?\n/)[0] ?? "";
-  const verdict = dispatch.branchOfferForWake(stateDir(), message, afk, true, routinePr);
+  const verdict = dispatch.branchOfferForWake(stateDir(), message, afk, true, !afk && routinePrOutcomesEnabled());
   process.stdout.write(`eligible=${verdict.eligible ? 1 : 0}\n${scopeLines(verdict.scope, verdict.heartbeat)}`);
 } else if (command === "wake-prompt") {
   let report = "";

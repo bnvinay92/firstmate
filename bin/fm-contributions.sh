@@ -93,7 +93,7 @@
 # before any wake. poll appends ordinary durable check wakes through fm-wake-lib
 # and emits only newly durable signals for the authenticated check to surface.
 # Under the routine PR outcomes opt-in (docs/configuration.md "Routine PR
-# outcomes"), poll removes an approval review with no body from pending as soon
+# outcomes"), poll removes a review with no body, in any state, from pending as soon
 # as it is recorded (bin/fm-routine-pr-lib.sh owns the test) and emits no wake
 # for it; the observation still carries the review, and the token stays in seen
 # and notified. ack removes
@@ -358,7 +358,7 @@ publish_pending() { # task canonical-url record-file
     if [ "$routine" -eq 1 ]; then
       type=$(jq -r --arg token "$token" '.pending[] | select(.token == $token) | .type // ""' "$record" | head -n 1)
       body=$(jq -r --arg token "$token" '.pending[] | select(.token == $token) | .body // ""' "$record")
-      if fm_routine_pr_contribution_event "$type" "$token" "$body"; then
+      if fm_routine_pr_contribution_event "$type" "$body"; then
         jq --arg token "$token" '.pending |= map(select(.token != $token)) | .notified = ((.notified // []) + [$token] | unique)' \
           "$record" > "$TMP/notified.json"
         mv "$TMP/notified.json" "$record"

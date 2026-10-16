@@ -355,13 +355,15 @@ Its presence opts the home in, whatever it holds; nothing infers it from whether
 While it is present, an event whose only news is a pull request's state opens no main turn:
 
 - A ship's ready line (`done: PR <url>`, optionally `checks green`) that the attended supervision host handles is stored as a routine outcome when the task's PR is parked: a ship with `yolo=off` whose merge poll is armed for that PR, and whose newly covered status lines are only that ready line and `working` lines.
-- A `check: merge landed:` row for a task that still has its record is taken by the attended supervision host, whose ordinary cleanup (`bin/fm-teardown.sh` with no flags) proves the work landed, refreshes the clone, and closes the backlog item; its outcome is stored routine only once that cleanup removed the task record.
+- A `check: merge landed:` row for a task that still has its record is taken by the attended supervision host, whose ordinary cleanup (`bin/fm-teardown.sh` with no flags) proves the work landed, refreshes the clone, and closes the backlog item; its outcome is stored routine once that cleanup removed the task record, or when the task's newest status line is a `working` or `paused` line, because its worker took on more work and the cleanup's refusal is expected until a later merge closes the task.
+  The attended host takes such a row only while no other check row waits for main, because main is woken for that row anyway and handles the merge in the same turn.
 - An inactive done ship whose PR is parked is recorded as presented without a wake, because its armed merge poll still wakes the home when the PR merges or closes.
-- A contribution signal that is an approval review with no body is settled without a wake and leaves the pending list; the observation keeps the review.
+- A contribution signal that is a review with no body, in any review state, is settled without a wake and leaves the pending list; the observation keeps the review.
 
-Everything else keeps its current path to main: a ship with `yolo=on`, whose merge MAIN performs itself; a ready line beside any other status line; a PR the merge poll does not watch; a cleanup that refused or did not run; any other check, decision, blocker, failure, or credential need; and every other contribution signal.
+Everything else keeps its current path to main: a ship with `yolo=on`, whose merge MAIN performs itself; a ready line beside any other status line; a PR the merge poll does not watch; a cleanup that refused or did not run for a task that is not still working; any other check, decision, blocker, failure, or credential need; and every other contribution signal, including any comment or review that carries text.
 A routine outcome is listed in main's next drain for awareness, and dispatching queued work that such a merge unblocked waits for main's next turn, because only main spawns work while the captain is present.
 The first two cases need the attended supervision host and leave Pi's in-process branch unchanged; the last two apply on any home.
+The host reads the file at every close, so a host started before the file was added or before an update applies it at its next close.
 `bin/fm-routine-pr-lib.sh` owns the gate and the parked-PR test, and each consumer's header owns its use.
 The file is a home-local presentation preference and is not inherited by secondmate homes.
 
