@@ -239,3 +239,25 @@ export function clock(ms: number): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${pad(at.getHours())}:${pad(at.getMinutes())}`
 }
+
+// Splits text into the spans of the lines it wraps to: the first fits `first`
+// cells and each later one `rest`. Breaks fall at spaces, which the break
+// drops; a word longer than a line, such as a URL, is split inside so no line
+// runs past the pane's edge. Each span is [start, end) into text.
+export function wrapSpans(text: string, first: number, rest: number = first): [number, number][] {
+  const spans: [number, number][] = []
+  let start = 0
+  while (start < text.length) {
+    const width = Math.max(1, spans.length === 0 ? first : rest)
+    if (text.length - start <= width) {
+      spans.push([start, text.length])
+      break
+    }
+    const room = text.lastIndexOf(' ', start + width)
+    const end = room > start ? room : start + width
+    spans.push([start, end])
+    start = end
+    while (text[start] === ' ') start++
+  }
+  return spans.length === 0 ? [[0, 0]] : spans
+}

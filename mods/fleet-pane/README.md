@@ -9,8 +9,10 @@ A Claude Code mod that keeps a live pane in the main Firstmate session listing e
   When the repository marks some checks required, only those block; the check summary still counts every check.
   A merged or closed pull request drops off.
 - **Decisions waiting for you:** every still-open decision in this home's task records, the same set the supervision drain lists, including the captain holds a second mate relays, plus every backlog item held for the captain that is due now.
-  Each shows on one line with its task, a short summary, and the report it names when it has one.
+  Each shows its task, a short summary, and the report it names when it has one.
   A worker's own blocker is Firstmate's to clear and is not listed.
+
+Every line stays within the pane's width: a longer one wraps onto lines indented under its row, so no title, URL, blocker, or summary is cut off, and a resized pane rewraps on its next draw.
 
 The pane is strictly read-only: it never writes to the home's records, the backlog, or GitHub, never sends anything to a worker, and has no buttons.
 

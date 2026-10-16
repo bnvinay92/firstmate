@@ -27,7 +27,8 @@ Open pull requests (8)
   ...
 
 Decisions waiting for you (12)
-  <second mate> · <hold name>: <one-line summary, cut at the pane's width>…
+  <second mate> · <hold name>: <summary, wrapped under its row at the pane's
+    width>
     report data/<report folder>/report.md
   ...
 
@@ -37,6 +38,29 @@ Updated 00:50, every minute and after each reply.
 The eight pull requests matched the home's task records with an open pull request, each with its full URL and a blocker: two ready and waiting for the merge word, one still a draft, one behind its base branch, the rest needing an approving review or with checks still running.
 The twelve decisions matched the home's open decisions: nine captain holds relayed by a second mate, one worker's open question, and two backlog items held for the captain.
 The home's `state/secondmate-summary-cache` folder was still empty after the session, as before it, confirming the snapshot run wrote no cache copy.
+
+## Wrapping at the captain's pane width
+
+This check ran on 2026-10-16 with Claude Code 2.1.301, the same way, in a 200-column terminal, where the pane docked about 70 columns wide, the width at which the captain saw lines cut off.
+Long titles, status lines, and decision summaries wrapped onto lines indented under their row; the widest drawn pane line was 72 cells including the frame's close mark, none ran past the right edge, and every URL and blocker showed whole:
+
+```text
+  axi: [MOP-1337] Drop the galileo-axi root shim: one package and one
+    install path per tool
+    https://github.com/careem/axi/pull/7
+    checks 2 failing - needs an approving review
+  ...
+  service-directory: [MOP-1337] Rename the galileo-axi entry to axi
+    after the repository rename
+    https://github.com/careem/service-directory/pull/4970
+    checks passing - needs an approving review; behind its base branch
+  ...
+  inspector-lavish-ship: Ship the Lavish review page for KSM
+    recordings?
+```
+
+Shrinking the terminal to 160 columns kept the pane within its width.
+`claude plugin test mods/fleet-pane` renders the pane at 70 and 34 columns and asserts no line is wider, and that URLs, blockers, and reports survive whole.
 
 Dark and light theme readability, the pane's colours, closing and reopening, merged pull requests dropping off, and the GitHub call budget are covered by `claude plugin test mods/fleet-pane`, which drives the pane through the engine's test kit on the terminal and desktop surfaces.
 Re-run this check after a Claude Code upgrade before relying on this record for a newer build.
