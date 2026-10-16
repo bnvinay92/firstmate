@@ -31,6 +31,19 @@
 # secondmate's per-child child-outcome-* lines. The receipt and response carry
 # the stored verdict, so such an outcome never opens a MAIN turn.
 #
+# Routine PR outcomes (docs/configuration.md "Routine PR outcomes"): while
+# config/routine-pr-outcomes opts the home in (bin/fm-routine-pr-lib.sh owns the
+# gate and the parked-PR test), a captain report is stored routine in two cases.
+# PR ready: the reported task is a parked PR and every claimed row is still
+# queued as a plain signal row; the report is appended with --routine-pr-ready
+# and the armed PR's URL, so bin/fm-branch-outcome.sh stores it routine exactly
+# when the status lines it covers are that PR's ready line and working lines.
+# Merge landed: every claimed row is a `check: merge landed: <task> ...` row for
+# the reported task and that task's record is already gone, which only a
+# completed bin/fm-teardown.sh leaves (its landed-work test, clone refresh, and
+# backlog completion all ran); a refused or skipped cleanup keeps the record
+# and so keeps the captain verdict.
+#
 # Only the branch actor of a live host turn may report: FM_SUPERVISION_ACTOR
 # must be "branch" and FM_BRANCH_REPORT_TURN must name the host's current turn
 # record ($STATE/.supervision-host-turn), so a report typed after its turn
@@ -62,6 +75,8 @@ TURN_FILE="$STATE/.supervision-host-turn"
 RECEIPTS="$STATE/.supervision-host-receipts"
 # shellcheck source=bin/fm-afk-contract.sh
 . "$SCRIPT_DIR/fm-afk-contract.sh"
+# shellcheck source=bin/fm-routine-pr-lib.sh
+. "$SCRIPT_DIR/fm-routine-pr-lib.sh"
 
 usage() {
   sed -n '/^# Usage:/,/^# --wake/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
@@ -127,45 +142,83 @@ fi
 
 [ "$WAKE_SET" -eq 1 ] || WAKE=$(turn_field wake)
 
-# 0 when this captain report may have its verdict decided by the covered span;
-# see "Routine child outcomes" above.
-routine_child_outcomes_eligible() {
+# 0 when every row the turn claims is still queued and is, for <shape> signal,
+# a plain signal row (no stale, check, heartbeat, or needs-decision row), or,
+# for <shape> merge, a merge-landed check row naming the reported task.
+claimed_rows_are() {  # signal|merge
   local rows queue
-  [ "$VERDICT" = captain ] && [ "$(turn_field unscoped)" != 1 ] || return 1
-  [ -f "$CONFIG/routine-child-outcomes" ] \
-    && sed 's/#.*//; s/^[[:space:]]*//; s/[[:space:]]*$//' "$CONFIG/routine-child-outcomes" 2>/dev/null \
-      | grep -qxF -- "$TASK" || return 1
-  [ "$(sed -n 's/^kind=//p' "$STATE/$TASK.meta" 2>/dev/null | tail -n 1)" = secondmate ] || return 1
   rows=$(turn_field rows)
   queue=${FM_WAKE_QUEUE:-$STATE/.wake-queue}
   [ -n "$rows" ] && [ -f "$queue" ] || return 1
-  awk -F '\t' -v seqs="$rows" '
+  awk -F '\t' -v seqs="$rows" -v shape="$1" -v merged="check: merge landed: $TASK " '
     BEGIN { n = split(seqs, list, " "); for (i = 1; i <= n; i++) want[list[i]] = 1 }
     NF >= 5 && ($2 in want) {
-      if ($3 != "signal" || $5 ~ /^needs-decision:/) bad = 1
+      if (shape == "signal" && ($3 != "signal" || $5 ~ /^needs-decision:/)) bad = 1
+      if (shape == "merge" && ($3 != "check" || index($5, merged) != 1)) bad = 1
       delete want[$2]
     }
     END { for (s in want) bad = 1; exit bad }
   ' "$queue"
 }
 
+# 0 when this captain report may have its verdict decided by the covered span;
+# see "Routine child outcomes" above.
+routine_child_outcomes_eligible() {
+  [ "$VERDICT" = captain ] && [ "$(turn_field unscoped)" != 1 ] || return 1
+  [ -f "$CONFIG/routine-child-outcomes" ] \
+    && sed 's/#.*//; s/^[[:space:]]*//; s/[[:space:]]*$//' "$CONFIG/routine-child-outcomes" 2>/dev/null \
+      | grep -qxF -- "$TASK" || return 1
+  [ "$(sed -n 's/^kind=//p' "$STATE/$TASK.meta" 2>/dev/null | tail -n 1)" = secondmate ] || return 1
+  claimed_rows_are signal
+}
+
+# 0 when this captain report may be stored routine as a PR-ready outcome, with
+# FM_ROUTINE_PR_URL naming the armed PR; see "Routine PR outcomes" above.
+routine_pr_ready_eligible() {
+  [ "$VERDICT" = captain ] && [ "$(turn_field unscoped)" != 1 ] || return 1
+  fm_routine_pr_outcomes_enabled "$CONFIG" || return 1
+  fm_routine_pr_task_parked "$STATE" "$TASK" || return 1
+  claimed_rows_are signal
+}
+
+# 0 when this captain report is a completed merge-landed cleanup; see "Routine
+# PR outcomes" above.
+routine_merge_landed() {
+  [ "$VERDICT" = captain ] && [ "$(turn_field unscoped)" != 1 ] || return 1
+  fm_routine_pr_outcomes_enabled "$CONFIG" || return 1
+  fm_pr_task_id_valid "$TASK" || return 1
+  [ ! -e "$STATE/$TASK.meta" ] && [ ! -L "$STATE/$TASK.meta" ] || return 1
+  claimed_rows_are merge
+}
+
 set -- append --task "$TASK" --verdict "$VERDICT" --summary "$SUMMARY" --silent "$SILENT"
 [ -z "$WAKE" ] || set -- "$@" --wake "$WAKE"
-DEMOTABLE=0
+DEMOTABLE=0 DEMOTED_WHY=
 if routine_child_outcomes_eligible; then
   DEMOTABLE=1
+  DEMOTED_WHY="$TASK is listed in config/routine-child-outcomes and these status lines are only its per-child outcomes"
   set -- "$@" --routine-child-outcomes
+elif routine_pr_ready_eligible; then
+  DEMOTABLE=1
+  DEMOTED_WHY="config/routine-pr-outcomes is set and these status lines only say $TASK's PR is ready"
+  set -- "$@" --routine-pr-ready "$FM_ROUTINE_PR_URL"
+elif routine_merge_landed; then
+  VERDICT=routine
+  set -- append --task "$TASK" --verdict routine --summary "$SUMMARY" --silent "$SILENT"
+  [ -z "$WAKE" ] || set -- "$@" --wake "$WAKE"
+  DEMOTED_WHY="config/routine-pr-outcomes is set and $TASK's PR merged and its cleanup completed"
 fi
 if ! SEQ=$("$SCRIPT_DIR/fm-branch-outcome.sh" "$@"); then
   echo "outcome store append failed (nothing recorded)" >&2
   exit 1
 fi
+[ "$DEMOTABLE" -eq 1 ] || [ -z "$DEMOTED_WHY" ] || printf 'stored as routine: %s\n' "$DEMOTED_WHY"
 if [ "$DEMOTABLE" -eq 1 ]; then
   STORED=${SEQ#* }
   SEQ=${SEQ%% *}
   if [ "$STORED" = routine ]; then
     VERDICT=routine
-    printf 'stored as routine: %s is listed in config/routine-child-outcomes and these status lines are only its per-child outcomes\n' "$TASK"
+    printf 'stored as routine: %s\n' "$DEMOTED_WHY"
   fi
 fi
 printf '%s\t%s\t%s\t%s\n' "$TURN" "$SEQ" "$VERDICT" "$TASK" >> "$RECEIPTS" || {

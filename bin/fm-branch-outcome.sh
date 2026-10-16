@@ -78,7 +78,7 @@
 # Usage:
 #   fm-branch-outcome.sh append --task <id> --verdict routine|captain \
 #       --summary <text> [--wake <text>] [--silent true|false] \
-#       [--routine-child-outcomes]
+#       [--routine-child-outcomes] [--routine-pr-ready <pr-url>]
 #     Append one outcome record; prints the assigned seq.
 #     --routine-child-outcomes stores a captain verdict as routine when the
 #     task's status lines this outcome newly covers - after the endpoint its
@@ -86,9 +86,16 @@
 #     under the lock - are nonempty and every one carries a child-outcome-*
 #     key (the per-child terminal lines bin/fm-inactive-reconcile.sh publishes
 #     on a secondmate's parent channel). Any other line, an empty span, or an
-#     unproven previous endpoint keeps the captain verdict. With the flag the
-#     output is "<seq> <stored verdict>". Only the caller decides eligibility
-#     (bin/fm-branch-report.sh, docs/configuration.md "Routine child outcomes").
+#     unproven previous endpoint keeps the captain verdict. Only the caller
+#     decides eligibility (bin/fm-branch-report.sh, docs/configuration.md
+#     "Routine child outcomes").
+#     --routine-pr-ready stores a captain verdict as routine, under the same
+#     covered-span read, when the span is nonempty, holds at least one ship
+#     ready line `done [at=<epoch>]: PR <pr-url>` (optionally ending
+#     ` checks green`) naming exactly <pr-url>, and every other line is a
+#     `working` line. With either flag the output is "<seq> <stored verdict>".
+#     Only the caller decides eligibility (bin/fm-branch-report.sh,
+#     docs/configuration.md "Routine PR outcomes").
 #   fm-branch-outcome.sh unread
 #     Print every unread record (raw JSONL). Exit 0 with no output when none.
 #   fm-branch-outcome.sh mark-read --through <seq>
@@ -173,7 +180,7 @@ RECORDED_AGO_JQ='def recorded_ago: ([$now - .epoch, 0] | max) as $s
     else "\($s / 86400 | floor)d" end;'
 
 usage() {
-  echo "usage: fm-branch-outcome.sh append --task <id> --verdict routine|captain --summary <text> [--wake <text>] [--silent true|false] [--routine-child-outcomes] | unread | mark-read --through <seq> | unprocessed | mark-processed --through <seq> | present | processed-init [--held-lock] | list [--recent <n>] | lookup --seqs <n,...> | startup-replay | seed-tail" >&2
+  echo "usage: fm-branch-outcome.sh append --task <id> --verdict routine|captain --summary <text> [--wake <text>] [--silent true|false] [--routine-child-outcomes] [--routine-pr-ready <pr-url>] | unread | mark-read --through <seq> | unprocessed | mark-processed --through <seq> | present | processed-init [--held-lock] | list [--recent <n>] | lookup --seqs <n,...> | startup-replay | seed-tail" >&2
   exit 2
 }
 
@@ -338,6 +345,36 @@ covered_span_child_outcomes_only() { # <task>
     case "$line" in *[![:space:]]*) ;; *) continue ;; esac
     key=$(_fm_decision_key "$line" '') || return 1
     case "$key" in child-outcome-?*) seen=1 ;; *) return 1 ;; esac
+  done <<EOF
+$span
+EOF
+  [ "$seen" -eq 1 ]
+}
+
+# 0 when the status lines <task>'s new outcome covers hold a ship ready line
+# naming exactly <pr-url> and otherwise only working lines; see the append
+# usage above.
+covered_span_pr_ready_only() { # <task> <pr-url>
+  local f="$STATE/$1.status" url=$2 start span line plain verb note seen=0
+  [ "$CAPTURED_STATUS_ENDPOINT" -gt 0 ] || return 1
+  start=$(previous_status_endpoint "$1")
+  [ "$start" -lt "$CAPTURED_STATUS_ENDPOINT" ] || return 1
+  span=$(_fm_status_read_span "$f" "$start" "$((CAPTURED_STATUS_ENDPOINT - start))") || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in *[![:space:]]*) ;; *) continue ;; esac
+    _fm_status_unstamped "$line" plain
+    case "$plain" in *:*) ;; *) return 1 ;; esac
+    verb=${plain%%:*}
+    note=${plain#*:}
+    note=${note# }
+    case "$verb" in
+      working) ;;
+      done)
+        [ "$note" = "PR $url" ] || [ "$note" = "PR $url checks green" ] || return 1
+        seen=1
+        ;;
+      *) return 1 ;;
+    esac
   done <<EOF
 $span
 EOF
@@ -556,6 +593,7 @@ case "$CMD" in
     WAKE=''
     SILENT=false
     ROUTINE_CHILD_OUTCOMES=0
+    ROUTINE_PR_READY=
     while [ "$#" -gt 0 ]; do
       case "$1" in
         --task) TASK=${2:-}; shift 2 || usage ;;
@@ -564,6 +602,7 @@ case "$CMD" in
         --wake) WAKE=${2:-}; shift 2 || usage ;;
         --silent) SILENT=${2:-}; shift 2 || usage ;;
         --routine-child-outcomes) ROUTINE_CHILD_OUTCOMES=1; shift ;;
+        --routine-pr-ready) ROUTINE_PR_READY=${2:-}; [ -n "$ROUTINE_PR_READY" ] || usage; shift 2 ;;
         *) usage ;;
       esac
     done
@@ -593,6 +632,10 @@ case "$CMD" in
       && covered_span_child_outcomes_only "$TASK"; then
       VERDICT=routine
     fi
+    if [ -n "$ROUTINE_PR_READY" ] && [ "$VERDICT" = captain ] \
+      && covered_span_pr_ready_only "$TASK" "$ROUTINE_PR_READY"; then
+      VERDICT=routine
+    fi
     rm -f -- "$OUTCOME_INDEX_READY" || { fm_lock_release "$LOCK"; exit 1; }
     printf '{"seq":%s,"epoch":%s,"task":"%s","wake":"%s","verdict":"%s","summary":"%s","silent":%s,"statusEndpoint":%s,"statusIdent":"%s"}\n' \
       "$SEQ" "$(date +%s)" "$(json_escape "$TASK")" "$(json_escape "$WAKE")" \
@@ -615,7 +658,7 @@ case "$CMD" in
       exit 1
     fi
     fm_lock_release "$LOCK"
-    if [ "$ROUTINE_CHILD_OUTCOMES" -eq 1 ]; then
+    if [ "$ROUTINE_CHILD_OUTCOMES" -eq 1 ] || [ -n "$ROUTINE_PR_READY" ]; then
       printf '%s %s\n' "$SEQ" "$VERDICT"
     else
       printf '%s\n' "$SEQ"

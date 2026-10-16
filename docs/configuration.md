@@ -11,7 +11,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Task windows and worker tools | [Runtime backend](#runtime-backend-configbackend--fm_backend) and [harness support](#harness-support) |
 | Worker permissions, accounts, or environment | [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), [worker tool exclusions](#worker-tool-exclusions-configcrew-exclude-tools), and [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist) |
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), [external memory tiers](#external-memory-tiers-memory-layering-section), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
-| Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), [routine child outcomes](#routine-child-outcomes-configroutine-child-outcomes), and [Calm preference](#calm-preference-configcalm) |
+| Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), [routine child outcomes](#routine-child-outcomes-configroutine-child-outcomes), [routine PR outcomes](#routine-pr-outcomes-configroutine-pr-outcomes), and [Calm preference](#calm-preference-configcalm) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
 | Per-run overrides and tuning | [Environment variables](#environment-variables) |
 
@@ -347,6 +347,23 @@ Every other line keeps the engine's verdict, including the secondmate's own gate
 A child's failed or blocked line still reaches the secondmate itself, which decides what reaches main.
 `bin/fm-branch-report.sh` owns eligibility and `bin/fm-branch-outcome.sh` owns the covered-span test.
 The file is a home-local relay preference and is not inherited by secondmate homes.
+
+## Routine PR outcomes (config/routine-pr-outcomes)
+
+The optional local, gitignored `config/routine-pr-outcomes` file is for a captain who watches open pull requests somewhere other than chat, such as the [fleet pane mod](../mods/fleet-pane/README.md).
+Its presence opts the home in, whatever it holds; nothing infers it from whether a pane or mod is installed, and without it every event below reaches main exactly as before.
+While it is present, an event whose only news is a pull request's state opens no main turn:
+
+- A ship's ready line (`done: PR <url>`, optionally `checks green`) that the attended supervision host handles is stored as a routine outcome when the task's PR is parked: a ship with `yolo=off` whose merge poll is armed for that PR, and whose newly covered status lines are only that ready line and `working` lines.
+- A `check: merge landed:` row for a task that still has its record is taken by the attended supervision host, whose ordinary cleanup (`bin/fm-teardown.sh` with no flags) proves the work landed, refreshes the clone, and closes the backlog item; its outcome is stored routine only once that cleanup removed the task record.
+- An inactive done ship whose PR is parked is recorded as presented without a wake, because its armed merge poll still wakes the home when the PR merges or closes.
+- A contribution signal that is an approval review with no body is settled without a wake and leaves the pending list; the observation keeps the review.
+
+Everything else keeps its current path to main: a ship with `yolo=on`, whose merge MAIN performs itself; a ready line beside any other status line; a PR the merge poll does not watch; a cleanup that refused or did not run; any other check, decision, blocker, failure, or credential need; and every other contribution signal.
+A routine outcome is listed in main's next drain for awareness, and dispatching queued work that such a merge unblocked waits for main's next turn, because only main spawns work while the captain is present.
+The first two cases need the attended supervision host and leave Pi's in-process branch unchanged; the last two apply on any home.
+`bin/fm-routine-pr-lib.sh` owns the gate and the parked-PR test, and each consumer's header owns its use.
+The file is a home-local presentation preference and is not inherited by secondmate homes.
 
 ## Backlog backend (.tasks.toml / config/backlog-backend)
 

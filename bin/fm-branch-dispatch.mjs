@@ -21,12 +21,14 @@
 //                       task or on fleet is in scope
 //     --heartbeat marks a heartbeat wake; --afk applies the away-posture
 //     collapse (docs/pi-supervision-branch.md "Postures").
-//   fm-branch-dispatch.mjs offer [--afk]
+//   fm-branch-dispatch.mjs offer [--afk] [--routine-pr-outcomes]
 //     Read one actionable close's reason line from stdin and print
 //     branchOfferForWake's verdict: eligible=0|1 (whether the branch may take
 //     this close at all, trigger class included), then the same five lines
 //     `scope` prints for the scan it judged. --afk judges it under the away
-//     posture.
+//     posture. --routine-pr-outcomes says the home opts into routine PR
+//     outcomes (docs/configuration.md "Routine PR outcomes"), so an attended
+//     scan may claim merge-landed check rows.
 //   fm-branch-dispatch.mjs wake-prompt --report <surface> [--mirror-file <path>] [--away [--readback-file <path>]]
 //     Read the watcher's wake reason from stdin and print the branch wake
 //     prompt naming <surface> as the report surface. --mirror-file puts the
@@ -49,7 +51,7 @@ const dispatch = await import(pathToFileURL(path.join(root, ".pi", "extensions",
 
 function usage() {
   process.stderr.write(
-    "usage: fm-branch-dispatch.mjs scope [--heartbeat] [--afk] | offer [--afk] | wake-prompt --report <surface> [--mirror-file <path>] [--away [--readback-file <path>]]\n",
+    "usage: fm-branch-dispatch.mjs scope [--heartbeat] [--afk] | offer [--afk] [--routine-pr-outcomes] | wake-prompt --report <surface> [--mirror-file <path>] [--away [--readback-file <path>]]\n",
   );
   process.exit(2);
 }
@@ -93,12 +95,14 @@ if (command === "scope") {
   process.stdout.write(scopeLines(dispatch.scopeForUnreadWake(stateDir(), heartbeat, afk), heartbeat));
 } else if (command === "offer") {
   let afk = false;
+  let routinePr = false;
   for (const arg of args) {
     if (arg === "--afk") afk = true;
+    else if (arg === "--routine-pr-outcomes") routinePr = true;
     else usage();
   }
   const message = readFileSync(0, "utf8").split(/\r?\n/)[0] ?? "";
-  const verdict = dispatch.branchOfferForWake(stateDir(), message, afk, true);
+  const verdict = dispatch.branchOfferForWake(stateDir(), message, afk, true, routinePr);
   process.stdout.write(`eligible=${verdict.eligible ? 1 : 0}\n${scopeLines(verdict.scope, verdict.heartbeat)}`);
 } else if (command === "wake-prompt") {
   let report = "";
