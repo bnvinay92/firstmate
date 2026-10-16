@@ -256,21 +256,29 @@ test_report_stores_routine_pr_outcomes_as_routine() {
 
   claim check "check: merge landed: alpha $url"
   out=$(report)
-  assert_contains "$out" "recorded seq 6 [captain]" "a merge whose cleanup left the task record must stay captain"
+  assert_contains "$out" "recorded seq 6 [captain]" "a merge whose cleanup left a finished task's record must stay captain"
+  line paused 'running the lint follow-up the captain asked for'
+  out=$(report)
+  assert_contains "$out" "stored as routine: config/routine-pr-outcomes is set and alpha's PR merged and its worker is still working on more" \
+    "a merge of a task whose worker took on more work must say why it was stored routine"
+  assert_contains "$out" "recorded seq 7 [routine]" "a merge of a task still working must be stored routine"
+  line blocked 'the follow-up needs a credential'
+  out=$(report)
+  assert_contains "$out" "recorded seq 8 [captain]" "a merge of a task whose newest line is a blocker must stay captain"
   rm -f "$state/alpha.meta"
   rm -f "$home/config/routine-pr-outcomes"
   out=$(report)
-  assert_contains "$out" "recorded seq 7 [captain]" "without the opt-in a completed merge cleanup must stay captain"
+  assert_contains "$out" "recorded seq 9 [captain]" "without the opt-in a completed merge cleanup must stay captain"
   : > "$home/config/routine-pr-outcomes"
   out=$(report)
   assert_contains "$out" "stored as routine: config/routine-pr-outcomes is set and alpha's PR merged" "a completed merge cleanup must say it was stored routine"
-  assert_contains "$out" "recorded seq 8 [routine]" "a completed merge cleanup must be stored routine"
+  assert_contains "$out" "recorded seq 10 [routine]" "a completed merge cleanup must be stored routine"
   claim signal "signal: $state/alpha.status"
   printf '%s\t%s\tcheck\tmerged-alpha\tcheck: merge landed: alpha %s\n' "$(date +%s)" 99 "$url" >> "$state/.wake-queue"
   printf 'turn=t%s\nrows=%s 99\ntasks=alpha\nunscoped=0\nwake=check\nposture=attended\n' "$seq" "$seq" > "$state/.supervision-host-turn"
   out=$(report)
-  assert_contains "$out" "recorded seq 9 [captain]" "a merge row claimed beside another row must stay captain"
-  pass "report surface: routine PR outcomes store only a parked PR's ready line and a completed merge cleanup as routine"
+  assert_contains "$out" "recorded seq 11 [captain]" "a merge row claimed beside another row must stay captain"
+  pass "report surface: routine PR outcomes store only a parked PR's ready line, a completed merge cleanup, and a merge of a task still working as routine"
 }
 
 # --- dispatch entry -----------------------------------------------------------
@@ -290,17 +298,25 @@ test_dispatch_entry_offers_merge_landed_under_routine_pr_outcomes() {
   out=$(printf 'check: %s/demo.check.sh: merged\n' "$state" | FM_HOME="$home" node "$DISPATCH" offer)
   assert_contains "$out" "eligible=0" "without the opt-in a merge-landed check must stay main's"
   out=$(printf 'check: %s/demo.check.sh: merged\n' "$state" | FM_HOME="$home" node "$DISPATCH" offer --routine-pr-outcomes)
-  assert_contains "$out" "eligible=1" "under the opt-in the attended host must take a merge-landed check"
+  assert_contains "$out" "eligible=0" "the legacy flag a pre-update host passes must not opt the home in by itself"
+  mkdir -p "$home/config"
+  : > "$home/config/routine-pr-outcomes"
+  out=$(printf 'check: %s/demo.check.sh: merged\n' "$state" | FM_HOME="$home" node "$DISPATCH" offer --routine-pr-outcomes)
+  assert_contains "$out" "eligible=1" "a pre-update host's legacy flag must still be accepted"
+  out=$(printf 'check: %s/demo.check.sh: merged\n' "$state" | FM_HOME="$home" node "$DISPATCH" offer)
+  assert_contains "$out" "eligible=1" "the offer must read the opt-in itself and take a merge-landed check"
   assert_contains "$out" "rows=1" "the merge row must be claimed"
   assert_contains "$out" "tasks=demo" "the merge row must be scoped to the task it names"
   assert_contains "$out" "unscoped=0" "a claimed merge row must leave the claim scoped"
 
   append_wake "$state" check merged-mate "check: merge landed: mate https://github.com/o/r/pull/9"
   append_wake "$state" check merged-gone "check: merge landed: gone https://github.com/o/r/pull/10"
-  out=$(printf 'check: merge landed: demo\n' | FM_HOME="$home" node "$DISPATCH" offer --routine-pr-outcomes)
+  out=$(printf 'check: merge landed: demo\n' | FM_HOME="$home" node "$DISPATCH" offer)
   assert_contains "$out" "eligible=0" "a merge row for a secondmate or a task with no record must keep the check trigger main's"
   assert_contains "$out" "rows=1" "only the ordinary task's merge row may be claimed"
-  pass "dispatch entry: the routine PR outcomes opt-in moves only a recorded task's merge-landed check to the attended host"
+  out=$(printf 'check: merge landed: demo\n' | FM_HOME="$home" node "$DISPATCH" offer --afk)
+  assert_contains "$out" "unscoped=1" "the away scan must keep claiming check rows unscoped, as without the opt-in"
+  pass "dispatch entry: the offer reads the routine PR outcomes opt-in itself and moves only a recorded task's merge-landed check to the attended host"
 }
 
 

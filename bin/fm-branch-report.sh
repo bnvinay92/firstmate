@@ -39,10 +39,12 @@
 # and the armed PR's URL, so bin/fm-branch-outcome.sh stores it routine exactly
 # when the status lines it covers are that PR's ready line and working lines.
 # Merge landed: every claimed row is a `check: merge landed: <task> ...` row for
-# the reported task and that task's record is already gone, which only a
-# completed bin/fm-teardown.sh leaves (its landed-work test, clone refresh, and
-# backlog completion all ran); a refused or skipped cleanup keeps the record
-# and so keeps the captain verdict.
+# the reported task, and either that task's record is already gone, which only
+# a completed bin/fm-teardown.sh leaves (its landed-work test, clone refresh,
+# and backlog completion all ran), or the task is still working on more work
+# (fm_routine_pr_task_working), so the cleanup's refusal is expected and the
+# task closes on its own later merge. A refused or skipped cleanup of a task
+# that is not still working keeps the record and so keeps the captain verdict.
 #
 # Only the branch actor of a live host turn may report: FM_SUPERVISION_ACTOR
 # must be "branch" and FM_BRANCH_REPORT_TURN must name the host's current turn
@@ -181,19 +183,24 @@ routine_pr_ready_eligible() {
   claimed_rows_are signal
 }
 
-# 0 when this captain report is a completed merge-landed cleanup; see "Routine
-# PR outcomes" above.
+# 0 when this captain report is a merge-landed outcome that needs nothing from
+# the captain; see "Routine PR outcomes" above.
 routine_merge_landed() {
   [ "$VERDICT" = captain ] && [ "$(turn_field unscoped)" != 1 ] || return 1
   fm_routine_pr_outcomes_enabled "$CONFIG" || return 1
   fm_pr_task_id_valid "$TASK" || return 1
-  [ ! -e "$STATE/$TASK.meta" ] && [ ! -L "$STATE/$TASK.meta" ] || return 1
+  if [ -e "$STATE/$TASK.meta" ] || [ -L "$STATE/$TASK.meta" ]; then
+    fm_routine_pr_task_working "$STATE" "$TASK" || return 1
+    MERGE_WHY="$TASK's PR merged and its worker is still working on more"
+  else
+    MERGE_WHY="$TASK's PR merged and its cleanup completed"
+  fi
   claimed_rows_are merge
 }
 
 set -- append --task "$TASK" --verdict "$VERDICT" --summary "$SUMMARY" --silent "$SILENT"
 [ -z "$WAKE" ] || set -- "$@" --wake "$WAKE"
-DEMOTABLE=0 DEMOTED_WHY=
+DEMOTABLE=0 DEMOTED_WHY='' MERGE_WHY=''
 if routine_child_outcomes_eligible; then
   DEMOTABLE=1
   DEMOTED_WHY="$TASK is listed in config/routine-child-outcomes and these status lines are only its per-child outcomes"
@@ -206,7 +213,7 @@ elif routine_merge_landed; then
   VERDICT=routine
   set -- append --task "$TASK" --verdict routine --summary "$SUMMARY" --silent "$SILENT"
   [ -z "$WAKE" ] || set -- "$@" --wake "$WAKE"
-  DEMOTED_WHY="config/routine-pr-outcomes is set and $TASK's PR merged and its cleanup completed"
+  DEMOTED_WHY="config/routine-pr-outcomes is set and $MERGE_WHY"
 fi
 if ! SEQ=$("$SCRIPT_DIR/fm-branch-outcome.sh" "$@"); then
   echo "outcome store append failed (nothing recorded)" >&2
