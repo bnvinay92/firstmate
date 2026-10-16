@@ -29,6 +29,9 @@ command -v fm_pr_poll_artifacts_valid >/dev/null 2>&1 || {
   . "$_FM_ROUTINE_PR_LIB_DIR/fm-pr-lib.sh"
 }
 
+# shellcheck disable=SC2034 # Public result consumed by sourcing callers.
+FM_ROUTINE_PR_URL=
+
 # 0 when <config-dir> opts this home in.
 fm_routine_pr_outcomes_enabled() {  # <config-dir>
   [ -f "$1/routine-pr-outcomes" ] && [ ! -L "$1/routine-pr-outcomes" ]
@@ -39,6 +42,7 @@ fm_routine_pr_outcomes_enabled() {  # <config-dir>
 # holds the armed poll's canonical PR URL.
 fm_routine_pr_task_parked() {  # <state> <task> [<pr-url>]
   local state=$1 task=$2 want=${3-} meta kind yolo mode
+  # shellcheck disable=SC2034 # Public result consumed by sourcing callers.
   FM_ROUTINE_PR_URL=
   fm_pr_task_id_valid "$task" || return 1
   meta="$state/$task.meta"
@@ -55,6 +59,7 @@ fm_routine_pr_task_parked() {  # <state> <task> [<pr-url>]
     fm_pr_url_parse "$want" || return 1
     [ "$FM_PR_URL" = "$FM_PR_DATA_URL" ] || return 1
   fi
+  # shellcheck disable=SC2034 # Public result consumed by sourcing callers.
   FM_ROUTINE_PR_URL=$FM_PR_DATA_URL
 }
 
