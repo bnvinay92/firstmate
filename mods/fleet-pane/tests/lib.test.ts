@@ -90,6 +90,24 @@ describe('reading the snapshot', () => {
     ])
   })
 
+  test('lists the pull request of a backlog item that is not done, once', () => {
+    const snapshot = {
+      ...SNAPSHOT,
+      backlog: {
+        records: [
+          { id: 'android-15336-merge', state: 'queued', pr_url: 'https://github.com/careem/superapp-android/pull/15336', unresolved_blocker_ids: ['ksm-release'] },
+          { id: 'axi-follow-up', state: 'in_flight', pr_url: 'https://github.com/careem/axi/pull/7', unresolved_blocker_ids: [] },
+          { id: 'old-ship', state: 'done', pr_url: 'https://github.com/careem/axi/pull/1', unresolved_blocker_ids: [] },
+        ],
+      },
+    }
+    expect(parseSnapshot(JSON.stringify(snapshot))?.prs.map(ref => [ref.task, ref.url, ref.waitsOn])).toEqual([
+      ['axi-packaging', 'https://github.com/careem/axi/pull/7', []],
+      ['ksm-debug', 'https://github.com/careem/kotlin-state-machine/pull/376', ['ksm-release']],
+      ['android-15336-merge', 'https://github.com/careem/superapp-android/pull/15336', ['ksm-release']],
+    ])
+  })
+
   test('refuses anything that is not a fleet snapshot', () => {
     expect(parseSnapshot('not json')).toBeNull()
     expect(parseSnapshot(JSON.stringify({ schema: 'other' }))).toBeNull()

@@ -72,7 +72,9 @@ export function reportIn(text: string): string | null {
 }
 
 // Every open pull request and every decision waiting on the captain, read from
-// one snapshot: a task's recorded pull request, a still-open `needs-decision`
+// one snapshot: a task's recorded pull request, the pull request linked from a
+// backlog item that is not done (one whose worker was already cleaned up is
+// still watched there), a still-open `needs-decision`
 // in a task's status log (the fold the wake drain's OPEN DECISIONS uses, so a
 // second mate's relayed captain holds are included), and every backlog item
 // held for the captain that is due now. A worker's own blocker is the
@@ -109,6 +111,17 @@ export function parseSnapshot(text: string): { prs: PrRef[]; decisions: Decision
       if (decision.verb !== 'needs-decision') continue
       const summary = asString(decision.summary) ?? ''
       decisions.push({ ...decisionText(id, summary), report: reportIn(summary) ?? ownReport })
+    }
+  }
+  for (const entry of asArray(asRecord(snapshot.backlog).records)) {
+    const record = asRecord(entry)
+    const id = asString(record.id)
+    const url = asString(record.pr_url)
+    const parsed = url === null ? null : parsePrUrl(url)
+    if (id !== null && record.state !== 'done' && url !== null && parsed !== null && !seen.has(url)) {
+      seen.add(url)
+      const waitsOn = asArray(record.unresolved_blocker_ids).filter((one): one is string => typeof one === 'string')
+      prs.push({ task: id, url, ...parsed, waitsOn })
     }
   }
   for (const entry of asArray(asRecord(snapshot.backlog).records)) {
