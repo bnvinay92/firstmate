@@ -6,6 +6,7 @@ import {
   APPLIED_FILE,
   APPROVED_FILE,
   BODY_INDENT,
+  CLEAR_WINDOW_MS,
   CONTEXT_FILE,
   REFRESH_MS,
   REGISTRY_FILE,
@@ -21,6 +22,7 @@ import {
   crossings,
   draftArgs,
   formatTokens,
+  homeKey,
   isOver,
   itemHeight,
   keyOf,
@@ -104,6 +106,16 @@ async function publish($: Engine, where: StowSite, threshold: number, tokens: nu
   await $.fs.write(`${where.home}/${CONTEXT_FILE}`, JSON.stringify({ version: 1, tokens, window, at: now }) + '\n')
 }
 
+// A session the mod clears holds next to nothing, but it reports no fill
+// until its next turn, so it publishes an empty reading at once: the main
+// session then stops offering it on its next read instead of five minutes on.
+async function publishCleared($: Engine, where: StowSite): Promise<void> {
+  const now = await $.clock.now()
+  const { context } = await $.session.usage()
+  published = { tokens: 0, at: now }
+  await $.fs.write(`${where.home}/${CONTEXT_FILE}`, JSON.stringify({ version: 1, tokens: 0, window: context.window, at: now }) + '\n')
+}
+
 async function refreshReadings($: Engine, where: StowSite): Promise<StowReading[]> {
   const now = await $.clock.now()
   const found: StowReading[] = []
@@ -168,18 +180,23 @@ async function followRound($: Engine, where: StowSite): Promise<void> {
   await $.ui.open({ id: PANE, title: 'Stow review', focus: true })
 }
 
-// Clear this home's session once per recorded round end that asks for it:
-// the record is written after every file write, and the command waits for
+// Clear this home's session once per recent recorded round end that asks for
+// it: the record is written after every file write, and the command waits for
 // the session to be idle, so the agent's turn finishes first.
 async function clearIfAsked($: Engine, where: StowSite): Promise<void> {
   const applied = parseApplied((await readText($, `${where.home}/${APPLIED_FILE}`)) ?? '')
   if (applied === null || !applied.clear) return
-  if ((await $.store.get('clearedAt')) === applied.at) return
-  await $.store.set('clearedAt', applied.at)
+  if ((await $.clock.now()) - applied.at * 1000 > CLEAR_WINDOW_MS) return
+  const key = homeKey('clearedAt', where.home)
+  if ((await $.store.get(key)) === applied.at) return
+  await $.store.set(key, applied.at)
   $.clock.after(1000, () => {
-    $.command.run({ command: 'clear', args: '' }).catch(() => {
-      $.ui.toast('The stow finished, but this session could not be cleared; run /clear.')
-    })
+    $.command.run({ command: 'clear', args: '' }).then(
+      () => publishCleared($, where),
+      () => {
+        $.ui.toast('The stow finished, but this session could not be cleared; run /clear.')
+      },
+    )
   })
 }
 
@@ -205,11 +222,12 @@ async function tick($: Engine, threshold: number): Promise<void> {
   await publish($, where, threshold, context.tokens, context.window)
   if (where.role === 'primary') {
     const found = await refreshReadings($, where)
-    const fired = ((await $.store.get('fired')) as string[] | undefined) ?? []
+    const firedKey = homeKey('fired', where.home)
+    const fired = ((await $.store.get(firedKey)) as string[] | undefined) ?? []
     const next = crossings(found, threshold, fired)
     // A crossing counts as stowed only when Auto actually starts its round.
     const starts = next.fire.length > 0 && (await read($, isAuto)) && (await read($, round)) === null
-    await $.store.set('fired', starts ? next.fired : next.fired.filter(home => !next.fire.includes(home)))
+    await $.store.set(firedKey, starts ? next.fired : next.fired.filter(home => !next.fire.includes(home)))
     if (starts) await startRound($, next.fire, true)
     await followRound($, where)
   }
@@ -220,7 +238,8 @@ async function toggleAuto($: Engine): Promise<void> {
   const value = !(await read($, isAuto))
   await update($, isAuto, () => value)
   await $.store.set('auto', value)
-  if (value) await $.store.set('fired', [])
+  const where = await read($, site)
+  if (value && where !== null) await $.store.set(homeKey('fired', where.home), [])
   $.ui.toast(value ? 'Auto stow is on: plans will be saved without review.' : 'Auto stow is off.')
 }
 
