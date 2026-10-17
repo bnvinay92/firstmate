@@ -56,8 +56,8 @@
           {
             "type": "command",
             "command": "[ -z \"${GROK_AGENT:-}${GROK_HOOK_EVENT:-}\" ] || exit 0; exec \"$CLAUDE_PROJECT_DIR\"/bin/fm-claude-stop-autoarm.sh",
-            "asyncRewake": true,
-            "timeout": 28800
+            "timeout": 28800,
+            "asyncRewake": true
           },
           {
             "type": "command",
@@ -67,5 +67,8 @@
         ]
       }
     ]
+  },
+  "enabledPlugins": {
+    "fleet-pane@firstmate-mods": true
   }
 }
