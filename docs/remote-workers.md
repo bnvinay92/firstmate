@@ -99,6 +99,7 @@ Every ordinary command keeps working on a placed worker's task id, and each one 
 | Watching | The watcher reads one bounded `observe` snapshot per poll (agent state, busy verdict, last lines) and the machine takes one step of the ordinary re-ring ladder for unread instructions. |
 | Current state and peek | `fm-crew-state.sh` runs on the machine against the worker's own record and relays its line; `fm-peek.sh` captures the remote pane. |
 | Lifecycle | `fm-control.sh <id>` with `interrupt`, `exit`, or `relaunch` runs the ordinary control plane on the machine; a relaunch republishes this home's record from the route the machine confirmed. |
+| PR handoff | `fm-pr-check.sh` asks the machine to verify the worker's named head is pushed, because the copy lives there; merging and the merge watch talk to the forge from here as for any ship. |
 | Capacity | A placed worker holds a place only in the machine's own project-capacity count, never in this machine's. |
 | Session start | The digest asks the machine for the endpoint's state, bounded, and prints an unreachable machine as unknown. |
 | Fleet view | The fleet snapshot carries the machine name and the machine's current-state line. |

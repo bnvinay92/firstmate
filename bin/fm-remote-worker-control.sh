@@ -13,6 +13,7 @@
 #   fm-remote-worker-control.sh route <id>
 #   fm-remote-worker-control.sh state <id>
 #   fm-remote-worker-control.sh crew-state <id>
+#   fm-remote-worker-control.sh accept-done <id> <done-line>
 #   fm-remote-worker-control.sh capture <id> [lines]
 #   fm-remote-worker-control.sh observe <id>
 #   fm-remote-worker-control.sh send <id> <message> [fire-and-forget]
@@ -405,6 +406,23 @@ cmd_launch() {
   print_route "$id"
 }
 
+# The ship-done acceptance bin/fm-pr-check.sh applies (bin/fm-dod-lib.sh owns
+# it), run here where the worker's copy and the project's refs live. Exit 0
+# accepts; otherwise the refusal reason is printed.
+cmd_accept_done() {
+  local id=$1 line=$2 kind mode wt project
+  validate_id "$id"
+  endpoint_require "$id"
+  case "$line" in *$'\n'*|*$'\r'*) die "the done line must be one line" ;; esac
+  kind=$(fm_meta_get "$ENDPOINT_META" kind)
+  mode=$(fm_meta_get "$ENDPOINT_META" mode)
+  wt=$(fm_meta_get "$ENDPOINT_META" worktree)
+  project=$(fm_meta_get "$ENDPOINT_META" project)
+  # shellcheck source=bin/fm-dod-lib.sh
+  . "$SCRIPT_DIR/fm-dod-lib.sh"
+  fm_dod_accept_ship_done "${kind:-ship}" "$mode" "$wt" "$project" "$line" "$STATE" "$id" "$ENDPOINT_META"
+}
+
 cmd_capture() {
   local id=$1 lines=${2:-40}
   validate_id "$id"
@@ -578,6 +596,7 @@ case "${1:-}" in
   route) shift; [ "$#" -eq 1 ] || usage; validate_id "$1"; print_route "$1" ;;
   state) shift; [ "$#" -eq 1 ] || usage; validate_id "$1"; state_value "$1" ;;
   crew-state) shift; [ "$#" -eq 1 ] || usage; validate_id "$1"; endpoint_require "$1"; host_env "$SCRIPT_DIR/fm-crew-state.sh" "$1" ;;
+  accept-done) shift; [ "$#" -eq 2 ] || usage; cmd_accept_done "$@" ;;
   capture) shift; [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage; cmd_capture "$@" ;;
   observe) shift; [ "$#" -eq 1 ] || usage; cmd_observe "$@" ;;
   send) shift; [ "$#" -ge 2 ] && [ "$#" -le 3 ] || usage; cmd_send "$@" ;;
