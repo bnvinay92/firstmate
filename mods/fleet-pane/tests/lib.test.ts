@@ -63,7 +63,7 @@ const status = (over: Partial<PrStatus> = {}, checks: Partial<PrStatus['checks']
   mergeable: 'MERGEABLE',
   mergeState: 'CLEAN',
   reviewDecision: null,
-  checks: { passing: 3, failing: 0, running: 0, failingRequired: 0, runningRequired: 0, hasRequired: false, ...checks },
+  checks: { passing: 3, failing: 0, running: 0, failingRequired: 0, runningRequired: 0, missingRequired: 0, required: 'none', ...checks },
   ...over,
 })
 
@@ -125,6 +125,7 @@ describe('asking GitHub', () => {
             mergeable: 'MERGEABLE',
             mergeStateStatus: 'BLOCKED',
             reviewDecision: 'REVIEW_REQUIRED',
+            baseRef: { branchProtectionRule: null, rules: { nodes: [] } },
             commits: {
               nodes: [
                 {
@@ -132,10 +133,10 @@ describe('asking GitHub', () => {
                     statusCheckRollup: {
                       contexts: {
                         nodes: [
-                          { __typename: 'CheckRun', status: 'COMPLETED', conclusion: 'SUCCESS', isRequired: true },
-                          { __typename: 'CheckRun', status: 'COMPLETED', conclusion: 'FAILURE', isRequired: false },
-                          { __typename: 'CheckRun', status: 'IN_PROGRESS', conclusion: null, isRequired: true },
-                          { __typename: 'StatusContext', state: 'ERROR', isRequired: true },
+                          { __typename: 'CheckRun', name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS', isRequired: true },
+                          { __typename: 'CheckRun', name: 'lint', status: 'COMPLETED', conclusion: 'FAILURE', isRequired: false },
+                          { __typename: 'CheckRun', name: 'test', status: 'IN_PROGRESS', conclusion: null, isRequired: true },
+                          { __typename: 'StatusContext', context: 'deploy', state: 'ERROR', isRequired: true },
                         ],
                       },
                     },
@@ -152,10 +153,98 @@ describe('asking GitHub', () => {
     const found = parsePrStatuses(JSON.stringify(answer), refs())
     expect(Object.keys(found)).toEqual(['https://github.com/careem/axi/pull/7'])
     const axi = found['https://github.com/careem/axi/pull/7']
-    expect(axi?.checks).toEqual({ passing: 1, failing: 2, running: 1, failingRequired: 1, runningRequired: 1, hasRequired: true })
+    expect(axi?.checks).toEqual({ passing: 1, failing: 2, running: 1, failingRequired: 1, runningRequired: 1, missingRequired: 0, required: 'some' })
     if (axi === undefined) return
     expect(checkSummary(axi)).toBe('2 failing, 1 running')
     expect(blockersOf(axi)).toEqual(['a failing check', 'checks still running', 'needs an approving review'])
+  })
+
+  // A pull request answered with the given base-branch rules and checks, as
+  // GitHub returns it for the query.
+  const answered = (baseRef: unknown, checks: [string, string, string | null][], mergeStateStatus = 'CLEAN', errors: unknown[] = []) =>
+    JSON.stringify({
+      data: {
+        p0: {
+          pullRequest: {
+            title: 'Package axi',
+            state: 'OPEN',
+            isDraft: false,
+            mergeable: 'MERGEABLE',
+            mergeStateStatus,
+            reviewDecision: null,
+            baseRef,
+            commits: {
+              nodes: [
+                {
+                  commit: {
+                    statusCheckRollup: {
+                      contexts: {
+                        nodes: checks.map(([name, status, conclusion]) => ({ __typename: 'CheckRun', name, status, conclusion, isRequired: false })),
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+      ...(errors.length > 0 ? { errors } : {}),
+    })
+  const rules = (...contexts: string[]) => ({
+    branchProtectionRule: null,
+    rules: { nodes: [{ type: 'PULL_REQUEST', parameters: {} }, { type: 'REQUIRED_STATUS_CHECKS', parameters: { requiredStatusChecks: contexts.map(context => ({ context })) } }] },
+  })
+  const blockersFor = (text: string) => {
+    const found = parsePrStatuses(text, refs().slice(0, 1))['https://github.com/careem/axi/pull/7']
+    if (found === undefined) throw new Error('no answer')
+    return blockersOf(found)
+  }
+
+  test('a required check still running keeps the pull request from ready', () => {
+    const text = answered(rules('JIRA in PRs', 'build'), [
+      ['JIRA in PRs', 'COMPLETED', 'SUCCESS'],
+      ['build', 'IN_PROGRESS', null],
+      ['lint', 'COMPLETED', 'SUCCESS'],
+    ])
+    expect(blockersFor(text)).toEqual(['checks still running'])
+  })
+
+  test('a required check that has not reported yet keeps the pull request from ready', () => {
+    const text = answered(rules('JIRA in PRs', 'SonarQube Code Analysis'), [
+      ['JIRA in PRs', 'COMPLETED', 'SUCCESS'],
+      ['validate', 'IN_PROGRESS', null],
+    ])
+    expect(blockersFor(text)).toEqual(['a required check not reported yet'])
+  })
+
+  test('branch protection names required checks too', () => {
+    const text = answered({ branchProtectionRule: { requiredStatusCheckContexts: ['validate-kmp'] }, rules: { nodes: [] } }, [
+      ['validate-kmp', 'QUEUED', null],
+      ['lint', 'COMPLETED', 'FAILURE'],
+    ])
+    expect(blockersFor(text)).toEqual(['checks still running'])
+  })
+
+  test('with the required checks unknown, any running or failing check blocks', () => {
+    const checks: [string, string, string | null][] = [
+      ['JIRA in PRs', 'COMPLETED', 'SUCCESS'],
+      ['validate', 'IN_PROGRESS', null],
+    ]
+    expect(blockersFor(answered(null, checks))).toEqual(['checks still running'])
+    const failedRules = [{ message: 'Resource not accessible', path: ['p0', 'pullRequest', 'baseRef', 'rules'] }]
+    expect(blockersFor(answered({ branchProtectionRule: null, rules: null }, checks, 'CLEAN', failedRules))).toEqual(['checks still running'])
+    expect(blockersFor(answered(rules('JIRA in PRs'), checks, 'CLEAN', failedRules))).toEqual(['checks still running'])
+  })
+
+  test('only advisory checks running, with every required check green, is ready', () => {
+    const text = answered(rules('JIRA in PRs', 'SonarQube Code Analysis'), [
+      ['JIRA in PRs', 'COMPLETED', 'SUCCESS'],
+      ['SonarQube Code Analysis', 'COMPLETED', 'SUCCESS'],
+      ['validate', 'IN_PROGRESS', null],
+      ['lint', 'COMPLETED', 'FAILURE'],
+    ], 'UNSTABLE')
+    expect(blockersFor(text)).toEqual(['ready - waiting for your word to merge'])
   })
 
   test('asks again only when the list changed or nearly a minute passed', () => {
@@ -183,8 +272,13 @@ describe('what blocks a pull request', () => {
   })
 
   test('with required checks, an advisory failure does not block', () => {
-    expect(blockersOf(status({}, { failing: 1, hasRequired: true }))).toEqual(['ready - waiting for your word to merge'])
+    expect(blockersOf(status({}, { failing: 1, required: 'some' }))).toEqual(['ready - waiting for your word to merge'])
     expect(blockersOf(status({}, { failing: 2 }))).toEqual(['2 failing checks'])
+    expect(blockersOf(status({}, { failing: 2, running: 1, required: 'unknown' }))).toEqual(['2 failing checks', 'checks still running'])
+  })
+
+  test('one GitHub reports blocked is never called ready', () => {
+    expect(blockersOf(status({ mergeState: 'BLOCKED' }, { required: 'some' }))).toEqual(['GitHub reports it blocked'])
   })
 
   test('merged or closed drops off; no answer still shows the pull request', () => {

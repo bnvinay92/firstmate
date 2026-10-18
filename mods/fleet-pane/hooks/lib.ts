@@ -41,7 +41,20 @@ export type PrStatus = {
   mergeable: string
   mergeState: string
   reviewDecision: string | null
-  checks: { passing: number; failing: number; running: number; failingRequired: number; runningRequired: number; hasRequired: boolean }
+  checks: {
+    passing: number
+    failing: number
+    running: number
+    failingRequired: number
+    runningRequired: number
+    // Required checks the repository names that have not reported on the
+    // pull request at all yet, such as one a later CI job creates.
+    missingRequired: number
+    // Whether the base branch's rules were read and named required checks:
+    // 'some' when they did, 'none' when they named none, and 'unknown' when
+    // GitHub did not answer for them.
+    required: 'some' | 'none' | 'unknown'
+  }
 }
 
 const PR_URL = /^https:\/\/github\.com\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)\/pull\/(\d+)\/?$/
@@ -122,10 +135,12 @@ export function parseSnapshot(text: string): { prs: PrRef[]; decisions: Decision
 }
 
 // One GraphQL query for every pull request: each is aliased p<index>, so a
-// single call answers the whole list however long it is.
+// single call answers the whole list however long it is. The base branch's
+// rulesets and protection name the required checks, including ones that have
+// not reported on the pull request yet.
 export function prQuery(refs: readonly PrRef[]): string {
   const fields = (n: number) =>
-    `title state isDraft mergeable mergeStateStatus reviewDecision commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename ... on CheckRun{status conclusion isRequired(pullRequestNumber:${n})} ... on StatusContext{state isRequired(pullRequestNumber:${n})}}}}}}}`
+    `title state isDraft mergeable mergeStateStatus reviewDecision baseRef{branchProtectionRule{requiredStatusCheckContexts} rules(first:100){nodes{type parameters{... on RequiredStatusChecksParameters{requiredStatusChecks{context}}}}}} commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename ... on CheckRun{name status conclusion isRequired(pullRequestNumber:${n})} ... on StatusContext{context state isRequired(pullRequestNumber:${n})}}}}}}}`
   const parts = refs.map(
     (ref, i) =>
       `p${i}: repository(owner:${JSON.stringify(ref.owner)}, name:${JSON.stringify(ref.repo)}) { pullRequest(number:${ref.number}) { ${fields(ref.number)} } }`,
@@ -135,6 +150,29 @@ export function prQuery(refs: readonly PrRef[]): string {
 
 const FAILED = new Set(['FAILURE', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE', 'ERROR'])
 const RUNNING = new Set(['QUEUED', 'IN_PROGRESS', 'WAITING', 'PENDING', 'REQUESTED', 'EXPECTED'])
+
+// The check names a base branch requires, from its rulesets and protection,
+// or null when GitHub did not answer for them (the branch is gone, or reading
+// its rules failed).
+function requiredContexts(baseRef: unknown, failed: boolean): Set<string> | null {
+  if (failed || typeof baseRef !== 'object' || baseRef === null) return null
+  const base = asRecord(baseRef)
+  const rules = asRecord(base.rules).nodes
+  if (!Array.isArray(rules)) return null
+  const names = new Set<string>()
+  for (const node of rules) {
+    const rule = asRecord(node)
+    if (rule.type !== 'REQUIRED_STATUS_CHECKS') continue
+    for (const one of asArray(asRecord(rule.parameters).requiredStatusChecks)) {
+      const context = asString(asRecord(one).context)
+      if (context !== null) names.add(context)
+    }
+  }
+  for (const one of asArray(asRecord(base.branchProtectionRule).requiredStatusCheckContexts)) {
+    if (typeof one === 'string' && one !== '') names.add(one)
+  }
+  return names
+}
 
 // GitHub's answer to prQuery, by pull request URL. A pull request GitHub could
 // not answer for (a renamed repository, no access) is left out; the answer
@@ -147,17 +185,27 @@ export function parsePrStatuses(text: string, refs: readonly PrRef[]): Record<st
     return {}
   }
   const data = asRecord(asRecord(raw).data)
+  // Aliases whose base-branch rules GitHub reported an error for.
+  const rulesFailed = new Set<unknown>()
+  for (const error of asArray(asRecord(raw).errors)) {
+    const path = asArray(asRecord(error).path)
+    if (path.includes('baseRef')) rulesFailed.add(path[0])
+  }
   const found: Record<string, PrStatus> = {}
   refs.forEach((ref, i) => {
     const pr = asRecord(asRecord(data[`p${i}`]).pullRequest)
     const state = asString(pr.state)
     if (state === null) return
-    const checks = { passing: 0, failing: 0, running: 0, failingRequired: 0, runningRequired: 0, hasRequired: false }
+    const named = requiredContexts(pr.baseRef, rulesFailed.has(`p${i}`))
+    const unreported = new Set(named ?? [])
+    const checks: PrStatus['checks'] = { passing: 0, failing: 0, running: 0, failingRequired: 0, runningRequired: 0, missingRequired: 0, required: 'none' }
     const commit = asRecord(asRecord(asArray(asRecord(pr.commits).nodes)[0]).commit)
     for (const node of asArray(asRecord(asRecord(commit.statusCheckRollup).contexts).nodes)) {
       const check = asRecord(node)
-      const isRequired = check.isRequired === true
-      if (isRequired) checks.hasRequired = true
+      const name = asString(check.__typename === 'StatusContext' ? check.context : check.name)
+      if (name !== null) unreported.delete(name)
+      const isRequired = check.isRequired === true || (name !== null && named?.has(name) === true)
+      if (isRequired) checks.required = 'some'
       const word = asString(check.__typename === 'StatusContext' ? check.state : check.status === 'COMPLETED' ? check.conclusion : check.status) ?? ''
       if (FAILED.has(word)) {
         checks.failing += 1
@@ -167,6 +215,9 @@ export function parsePrStatuses(text: string, refs: readonly PrRef[]): Record<st
         if (isRequired) checks.runningRequired += 1
       } else checks.passing += 1
     }
+    if (named === null) checks.required = 'unknown'
+    else if (named.size > 0) checks.required = 'some'
+    checks.missingRequired = unreported.size
     found[ref.url] = {
       title: asString(pr.title) ?? '',
       state,
@@ -190,22 +241,29 @@ export function checkSummary(status: PrStatus): string {
   return parts.join(', ')
 }
 
-// What keeps a pull request from merging, most basic first. A repository that
-// marks no check required has every check counted, so a failing check there
-// still reads as a blocker rather than vanishing.
+// What keeps a pull request from merging, most basic first. Only required
+// checks block when the base branch names some; a repository that marks no
+// check required, or whose rules GitHub did not answer for, has every check
+// counted, so a failing or running check there still reads as a blocker
+// rather than vanishing. A required check that has not reported yet blocks,
+// and a pull request GitHub itself reports blocked is never called ready.
 export function blockersOf(status: PrStatus, waitsOn: readonly string[] = []): string[] {
   const found: string[] = []
   const { checks } = status
-  const failing = checks.hasRequired ? checks.failingRequired : checks.failing
-  const running = checks.hasRequired ? checks.runningRequired : checks.running
+  const onlyRequired = checks.required === 'some'
+  const failing = onlyRequired ? checks.failingRequired : checks.failing
+  const running = onlyRequired ? checks.runningRequired : checks.running
+  const missing = onlyRequired ? checks.missingRequired : 0
   if (status.isDraft) found.push('still a draft')
   if (status.mergeable === 'CONFLICTING') found.push('merge conflict')
   if (failing > 0) found.push(failing === 1 ? 'a failing check' : `${failing} failing checks`)
   if (running > 0) found.push('checks still running')
+  if (missing > 0) found.push(missing === 1 ? 'a required check not reported yet' : `${missing} required checks not reported yet`)
   if (status.reviewDecision === 'CHANGES_REQUESTED') found.push('changes requested in review')
   if (status.reviewDecision === 'REVIEW_REQUIRED') found.push('needs an approving review')
   if (status.mergeState === 'BEHIND') found.push('behind its base branch')
   if (waitsOn.length > 0) found.push(`waits on ${waitsOn.join(', ')}`)
+  if (found.length === 0 && status.mergeState === 'BLOCKED') found.push('GitHub reports it blocked')
   if (found.length === 0) found.push('ready - waiting for your word to merge')
   return found
 }
