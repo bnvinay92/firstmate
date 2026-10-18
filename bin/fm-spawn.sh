@@ -3,6 +3,10 @@
 # secondmate in its isolated firstmate home.
 # Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--herdr-resume-lock-wait]
 #        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--herdr-resume-lock-wait]
+#        fm-spawn.sh <task-id> <project-dir> {--scout|--mode direct-PR --yolo <on|off>} --machine <machine-id> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness claude] [--model <name>] [--effort <level>]
+#   --machine places this fresh ship or scout on a worker machine registered in
+#   config/worker-machines instead of this machine, from the main home only;
+#   bin/fm-remote-worker-spawn.sh owns that path and its limits.
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
@@ -745,6 +749,8 @@ BASE_BRANCH_SET=0
 UPSTREAM_CONSENT=
 UPSTREAM_CONSENT_SET=0
 TRACEPARENT_SET=0
+MACHINE=
+MACHINE_SET=0
 RELAUNCH=0
 # Opt-in only: exact-resume presentation-order lock waits instead of refusing.
 # Absent/unset keeps upstream refuse-on-contention. See header.
@@ -799,6 +805,10 @@ for a in "$@"; do
     traceparent)
       TRACEPARENT_ARG=$a
       TRACEPARENT_SET=1
+      ;;
+    machine)
+      MACHINE=$a
+      MACHINE_SET=1
       ;;
     *)
       echo "error: internal parser state for --$want_value" >&2
@@ -868,6 +878,11 @@ for a in "$@"; do
   --traceparent=*)
     TRACEPARENT_ARG=${a#--traceparent=}
     TRACEPARENT_SET=1
+    ;;
+  --machine) want_value=machine ;;
+  --machine=*)
+    MACHINE=${a#--machine=}
+    MACHINE_SET=1
     ;;
   *) POS+=("$a") ;;
   esac
@@ -1027,6 +1042,47 @@ else
       exit 1
     }
   fi
+fi
+
+# --machine places this one fresh ship or scout on a registered worker machine
+# instead of this one. The flags above are validated exactly as for a local
+# spawn; bin/fm-remote-worker-spawn.sh owns everything after, and
+# docs/remote-workers.md owns the model and its limits.
+if [ "$MACHINE_SET" -eq 1 ]; then
+  [ -n "$MACHINE" ] || {
+    echo "error: --machine requires a non-empty machine id" >&2
+    exit 1
+  }
+  [ "$RELAUNCH" -eq 0 ] || {
+    echo "error: --machine applies only to a fresh spawn; a placed worker relaunches through bin/fm-control.sh" >&2
+    exit 1
+  }
+  [ "$KIND" != secondmate ] || {
+    echo "error: --machine places ship and scout workers only; a remote secondmate is a route in data/secondmates.md" >&2
+    exit 1
+  }
+  [ "$BACKEND_SET" -eq 0 ] || {
+    echo "error: --machine and --backend cannot be combined; a placed worker runs on the worker machine's own backend" >&2
+    exit 1
+  }
+  [ "$UPSTREAM_CONSENT_SET" -eq 0 ] || {
+    echo "error: --machine does not carry --upstream-consent in this release; ship that task from this machine" >&2
+    exit 1
+  }
+  [ "${#POS[@]}" -ge 2 ] && [ "${#POS[@]}" -le 3 ] || {
+    echo "error: --machine takes exactly one <task-id> <project-dir> pair" >&2
+    exit 1
+  }
+  MACHINE_HARNESS=$HARNESS_ARG
+  [ "${#POS[@]}" -lt 3 ] || MACHINE_HARNESS=${POS[2]}
+  [ -n "$MACHINE_HARNESS" ] || MACHINE_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" crew 2>/dev/null || true)
+  MACHINE_KIND=$KIND
+  MACHINE_MODE=${MODE:--}
+  MACHINE_YOLO=${YOLO:--}
+  MACHINE_BASE=${BASE_BRANCH:--}
+  exec "$SCRIPT_DIR/fm-remote-worker-spawn.sh" "${POS[0]}" "${POS[1]}" "$MACHINE" "$MACHINE_KIND" \
+    "$MACHINE_MODE" "$MACHINE_YOLO" "$BRANCH_PREFIX" "$MACHINE_BASE" "${MACHINE_HARNESS:-claude}" \
+    "${MODEL:--}" "${EFFORT:--}"
 fi
 
 spawn_remote_secondmate() {

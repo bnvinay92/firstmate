@@ -13,6 +13,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), [external memory tiers](#external-memory-tiers-memory-layering-section), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), [routine child outcomes](#routine-child-outcomes-configroutine-child-outcomes), [routine PR outcomes](#routine-pr-outcomes-configroutine-pr-outcomes), and [Calm preference](#calm-preference-configcalm) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
+| Running individual workers on another machine | [Worker machines](#worker-machines-configworker-machines) |
 | Per-run overrides and tuning | [Environment variables](#environment-variables) |
 
 ## FM_HOME
@@ -792,7 +793,7 @@ The concise single-line route contract is owned by the [`secondmate-provisioning
 
 ### Remote routes and validation
 
-A remote route adds `host:` and `root:` before the existing fields and places the whole secondmate home on that SSH host; it does not make ordinary workers remotely placeable.
+A remote route adds `host:` and `root:` before the existing fields and places the whole secondmate home on that SSH host; placing an individual worker is the separate [worker machines](#worker-machines-configworker-machines) registry.
 [`remote-secondmates.md`](remote-secondmates.md) owns current remote setup, operation, and safety behavior.
 
 Use `fm-home-seed.sh validate` to check the complete operational registry contract documented by the command itself.
@@ -831,6 +832,17 @@ This does not relax protection for any other untracked file.
 An existing linked-worktree home that predates this rule advances through its marker-only state during its next bootstrap or spawn local sync, after which Git ignores the marker normally.
 
 A local standalone-clone home cannot receive a primary-local commit through that no-fetch sync, so it receives the rule through `/updatefirstmate`'s origin refresh instead.
+
+## Worker machines (config/worker-machines)
+
+`config/worker-machines` lists the machines the main home may place an individual ship or scout worker on with `bin/fm-spawn.sh --machine <machine-id>`.
+It is local and gitignored, and an absent file means no worker is ever placed elsewhere.
+
+Each line names one machine: `<machine-id> host=<ssh-alias> root=<remote-code-root> home=<worker-host-home> [prefer=<tag>,...]`.
+`root=` is the machine's Firstmate clone, and `home=` is a separate absolute path for the worker-host home that holds that machine's project clones and placed workers.
+`prefer=` is intake guidance only, such as `prefer=android,jvm` for work the captain prefers to run on that machine.
+
+[`bin/fm-worker-machine-lib.sh`](../bin/fm-worker-machine-lib.sh) owns the exact format and its refusals, and [remote workers](remote-workers.md) owns the setup, scope, and safety behavior.
 
 ## Harness support
 

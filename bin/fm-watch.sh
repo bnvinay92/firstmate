@@ -248,6 +248,13 @@ WATCH_HOME_EXISTED=0
 # and wake emission (secondmate_liveness_tick below).
 # shellcheck source=/dev/null # Analyzed separately as a canonical lint root.
 . "$SCRIPT_DIR/fm-secondmate-liveness-lib.sh"
+# A ship or scout placed on a worker machine (docs/remote-workers.md) is watched
+# through one bounded observe call per poll instead of a local capture
+# (remote_worker_observe below).
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
+# shellcheck source=bin/fm-remote-worker-lib.sh
+. "$SCRIPT_DIR/fm-remote-worker-lib.sh"
 
 WATCH_LOCK="$STATE/.watch.lock"
 WATCH_PATH="$SCRIPT_DIR/fm-watch.sh"
@@ -448,6 +455,10 @@ hash_pane() {
 # its fm-spawn seed from reading as provably working.
 window_is_busy() {  # <window> <tail40>
   local w=$1 tail40=$2 task meta verdict
+  if [ -n "$REMOTE_OBSERVE_WINDOW" ] && [ "$w" = "$REMOTE_OBSERVE_WINDOW" ]; then
+    [ "${REMOTE_OBSERVE_BUSY%% *}" = busy ]
+    return
+  fi
   task=$(window_to_task "$w" "$STATE")
   meta="$STATE/$task.meta"
   if [ -n "$task" ] && [ -f "$meta" ]; then
@@ -511,6 +522,66 @@ window_key() {  # <window>
   local key=${1//:/_}
   key=${key//\//_}
   printf '%s' "${key//./_}"
+}
+
+# A placed ship or scout worker's pane lives on its worker machine
+# (docs/remote-workers.md), so the pane-staleness backbone reads it through one
+# bounded `observe` call per poll: the machine returns the agent state, the
+# semantic busy verdict, the last 40 lines, and the outcome of one step of the
+# ordinary steering-inbox re-ring ladder it took there. On success this sets
+# WATCHER_CAPTURE plus the REMOTE_OBSERVE_* values window_is_busy and
+# wedge_dead_record read for that window, surfaces an inbox escalation the same
+# way inbox_steer_check does, and returns 0. A machine that does not answer is
+# reported once per unreachable episode - never as a wedge or a death, because
+# its workers keep running there and their status mirrors on reconnect - and
+# returns 1 so this poll skips the window.
+REMOTE_OBSERVE_WINDOW=
+REMOTE_OBSERVE_BUSY=
+REMOTE_OBSERVE_AGENT=
+REMOTE_OBSERVE_SECS=${FM_REMOTE_OBSERVE_SECS:-20}
+remote_worker_observe() {  # <window> <task>
+  local w=$1 task=$2 machine out rc=0 header inbox rec count marker reason
+  REMOTE_OBSERVE_WINDOW=
+  fm_remote_worker_meta "$STATE/$task.meta" || return 1
+  machine=$FM_REMOTE_WORKER_MACHINE
+  marker="$STATE/.remote-unreachable-$machine"
+  out=$(fm_run_timed "$REMOTE_OBSERVE_SECS" "$SCRIPT_DIR/fm-on.sh" --machine "$machine" \
+    fm-remote-worker-control.sh observe "$task" < /dev/null 2>/dev/null) || rc=$?
+  header=$(printf '%s\n' "$out" | sed '/^---$/q')
+  if [ "$rc" -ne 0 ] || [ "$(printf '%s\n' "$header" | sed -n 's/^schema=//p')" != fm-remote-worker-observe.v1 ]; then
+    if [ ! -e "$marker" ]; then
+      date +%s > "$marker"
+      reason="stale: $w (machine $machine unreachable or unreadable; its workers keep running there and their status mirrors on reconnect - not proof of death, so do not relaunch locally)"
+      fm_wake_append stale "$w" "$reason" || exit 1
+      wake "$reason"
+    fi
+    triage_log "remote observe failed (rc=$rc): $w on machine $machine"
+    return 1
+  fi
+  rm -f "$marker"
+  REMOTE_OBSERVE_WINDOW=$w
+  REMOTE_OBSERVE_AGENT=$(printf '%s\n' "$header" | sed -n 's/^agent=//p')
+  REMOTE_OBSERVE_BUSY=$(printf '%s\n' "$header" | sed -n 's/^busy=//p')
+  WATCHER_CAPTURE=$(printf '%s\n' "$out" | sed '1,/^---$/d')
+  inbox=$(printf '%s\n' "$header" | sed -n 's/^inbox=//p')
+  case "$inbox" in
+    escalate\ *)
+      rec=${inbox#escalate }
+      count=${rec##* }
+      rec=${rec% *}
+      reason="stale: $w (unread firstmate instruction: $rec on machine $machine is still unhandled after $count doorbell delivery attempts with an idle pane; inspect the worker)"
+      fm_wake_append stale "$w" "$reason" || exit 1
+      wake "$reason"
+      ;;
+    unavailable\ *)
+      rec=${inbox#unavailable }
+      reason="stale: $w (unread firstmate instruction: $rec on machine $machine is unhandled and the worker's agent has exited or its endpoint is missing, so the doorbell was not typed; recover the worker with bin/fm-control.sh $task relaunch)"
+      fm_wake_append stale "$w" "$reason" || exit 1
+      wake "$reason"
+      ;;
+    ring|retry) triage_log "steer-inbox delivery attempt on machine $machine: $task ($inbox)" ;;
+  esac
+  return 0
 }
 
 inbox_steer_escalate_unavailable() {  # <window> <task> <record>
@@ -1518,7 +1589,11 @@ wedge_dead_record() {  # <window> <since-file> <triage-label> <idle-age> <pane-h
   local win=$1 since_file=$2 label=$3 age=$4 hash=$5 task=$6 key marker agent_state detail reason gen id
   key=$(window_key "$win")
   marker="$STATE/.dead-reported-$key"
-  agent_state=$(fm_backend_agent_state "$(window_backend "$win")" "$win" 2>/dev/null) || agent_state=unreadable
+  if [ -n "$REMOTE_OBSERVE_WINDOW" ] && [ "$win" = "$REMOTE_OBSERVE_WINDOW" ]; then
+    agent_state=$REMOTE_OBSERVE_AGENT
+  else
+    agent_state=$(fm_backend_agent_state "$(window_backend "$win")" "$win" 2>/dev/null) || agent_state=unreadable
+  fi
   case "$agent_state" in
     dead) detail='the endpoint is still there with no agent running in it' ;;
     missing) detail='the recorded endpoint is gone' ;;
@@ -3174,7 +3249,12 @@ EOF
     if [ "$kind" = secondmate ] && ! status_is_paused_or_captain_held "$last"; then
       continue
     fi
-    watcher_capture "$(window_backend "$w")" "$w" 40 "$(window_label "$w")" || continue
+    REMOTE_OBSERVE_WINDOW=
+    if [ -n "$task" ] && fm_remote_worker_meta "$STATE/$task.meta"; then
+      remote_worker_observe "$w" "$task" || continue
+    else
+      watcher_capture "$(window_backend "$w")" "$w" 40 "$(window_label "$w")" || continue
+    fi
     tail40=$WATCHER_CAPTURE
     # The matcher is already defined in this shell. It reads the capture this
     # poll already takes, and a miss drops a name the away daemon saved.

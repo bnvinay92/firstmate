@@ -3,6 +3,9 @@
 #
 # Source this file and call:
 #   fm_remote_readiness_ensure <bin-dir> <secondmate-id>
+#   fm_remote_readiness_ensure_route <bin-dir> <fm-on route args...>
+# The second form takes any bin/fm-on.sh route, such as `--machine <id>` for a
+# worker machine (docs/remote-workers.md).
 #
 # It runs bin/fm-remote-doctor.sh on that route's configured host, and when the
 # read-only run reports any gap it runs the doctor again with --fix and then a
@@ -22,20 +25,25 @@
 FM_REMOTE_READINESS_OUT=
 
 fm_remote_readiness_ensure() { # <bin-dir> <secondmate-id>
-  local bin_dir=$1 id=$2 out rc
+  fm_remote_readiness_ensure_route "$1" "$2"
+}
 
-  out=$("$bin_dir/fm-on.sh" "$id" fm-remote-doctor.sh < /dev/null 2>&1)
+fm_remote_readiness_ensure_route() { # <bin-dir> <fm-on route args...>
+  local bin_dir=$1 out rc
+  shift
+
+  out=$("$bin_dir/fm-on.sh" "$@" fm-remote-doctor.sh < /dev/null 2>&1)
   rc=$?
   FM_REMOTE_READINESS_OUT=$out
   [ "$rc" -ne 0 ] || return 0
   [ "$rc" -ne 255 ] || return 255
 
-  out=$("$bin_dir/fm-on.sh" "$id" fm-remote-doctor.sh --fix < /dev/null 2>&1)
+  out=$("$bin_dir/fm-on.sh" "$@" fm-remote-doctor.sh --fix < /dev/null 2>&1)
   rc=$?
   FM_REMOTE_READINESS_OUT=$out
   [ "$rc" -ne 255 ] || return 255
 
-  out=$("$bin_dir/fm-on.sh" "$id" fm-remote-doctor.sh < /dev/null 2>&1)
+  out=$("$bin_dir/fm-on.sh" "$@" fm-remote-doctor.sh < /dev/null 2>&1)
   rc=$?
   FM_REMOTE_READINESS_OUT=$out
   [ "$rc" -ne 255 ] || return 255

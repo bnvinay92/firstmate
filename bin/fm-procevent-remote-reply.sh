@@ -69,6 +69,14 @@
 #     wrote (see WINDOW_CLOSED_EMPTY below)
 # Line framing and size bounding belong to bin/fm-remote-delta-read.sh, which
 # delivers only whole lines and breaks continuity on an over-long one.
+#
+# The same mirror serves an individually placed ship or scout worker
+# (docs/remote-workers.md): when state/<id>.meta records remote_kind=worker, the
+# source is that worker's own state/<id>.status in its machine's worker-host
+# home, reached through `fm-on.sh --machine`, and an offered document lands at
+# the same data/<id>/ path in this home rather than under
+# data/remote-secondmates/, because a scout's report IS this task's deliverable.
+# Only data/<id>/*.md other than the brief files is accepted from a worker.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -76,8 +84,12 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 CURSOR_DIR="$STATE/remote-replies"
-REMOTE_LOG='state/parent-replies.status'
+SECONDMATE_LOG='state/parent-replies.status'
+REMOTE_LOG=$SECONDMATE_LOG
+REPLY_ROUTE=()
+REPLY_WORKER=0
 WAIT_SECONDS=${FM_REMOTE_REPLY_WAIT_SECONDS:-55}
 MAX_DOC_BYTES=${FM_REMOTE_REPLY_MAX_DOC_BYTES:-262144}
 # fm-on.sh returns ssh's status unchanged, so 255 alone means unavailable
@@ -95,6 +107,12 @@ DOCUMENT_LOCAL_FAILURE=2
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 # shellcheck source=bin/fm-pending-reply-lib.sh
 . "$SCRIPT_DIR/fm-pending-reply-lib.sh"
+# shellcheck source=bin/fm-backend.sh
+. "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-worker-machine-lib.sh
+. "$SCRIPT_DIR/fm-worker-machine-lib.sh"
+# shellcheck source=bin/fm-remote-worker-lib.sh
+. "$SCRIPT_DIR/fm-remote-worker-lib.sh"
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 usage() { sed -n '2,66p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
@@ -260,8 +278,28 @@ classify_result() {
   esac
 }
 
+# Select the route and source log for <id>: a placed worker's own status log
+# on its machine, or a remote secondmate's parent-reply log on its host.
+reply_route() { # <id>
+  if fm_remote_worker_meta "$STATE/$1.meta"; then
+    REPLY_WORKER=1
+    REPLY_ROUTE=(--machine "$FM_REMOTE_WORKER_MACHINE")
+    REMOTE_LOG="state/$1.status"
+  else
+    REPLY_WORKER=0
+    REPLY_ROUTE=("$1")
+    REMOTE_LOG=$SECONDMATE_LOG
+  fi
+}
+
 remote_route_exists() {
   local id=$1 remote
+  reply_route "$id"
+  if [ "$REPLY_WORKER" = 1 ]; then
+    fm_worker_machine_resolve "$CONFIG" "$FM_REMOTE_WORKER_MACHINE" \
+      || die "worker $id's machine is not registered: $FM_WORKER_MACHINE_ERROR"
+    return 0
+  fi
   remote=$(secondmate_registry_field "$DATA/secondmates.md" "$id" remote 2>/dev/null || true)
   [ "$remote" = 1 ] || die "secondmate $id is not a configured remote route"
 }
@@ -310,7 +348,8 @@ cmd_source() {
   validate_id "$id"
   read_cursor "$id"
   started=$(fm_pending_reply_now)
-  "$SCRIPT_DIR/fm-on.sh" "$id" fm-remote-delta-read.sh \
+  reply_route "$id"
+  "$SCRIPT_DIR/fm-on.sh" "${REPLY_ROUTE[@]}" fm-remote-delta-read.sh \
     "$REMOTE_LOG" "$CURSOR_OFFSET" "$CURSOR_HASH" "$WAIT_SECONDS" < /dev/null || rc=$?
   if [ "$rc" -eq "$WINDOW_CLOSED_EMPTY" ]; then
     fm_pending_reply_note_remote_channel_caught_up "$STATE" "$id" "$started" || true
@@ -426,8 +465,25 @@ fetch_document() { # <id> <remote-relative> <result-var>
     FETCH_DOC_REASON='pointer is not a confined data/*.md path'
     return 1
   fi
-  base="$DATA/remote-secondmates/$id"
-  destination="$base/$rel"
+  reply_route "$id"
+  if [ "$REPLY_WORKER" = 1 ]; then
+    case "$rel" in
+      "data/$id/brief.md"|"data/$id/launch-brief.md")
+        FETCH_DOC_REASON="a worker's brief is never copied back over this home's own"
+        return 1
+        ;;
+      "data/$id/"*) ;;
+      *)
+        FETCH_DOC_REASON="a placed worker may offer only documents under its own data/$id/ directory"
+        return 1
+        ;;
+    esac
+    base="$DATA/$id"
+    destination="$DATA/${rel#data/}"
+  else
+    base="$DATA/remote-secondmates/$id"
+    destination="$base/$rel"
+  fi
   parent=$(dirname "$destination")
   mkdir -p "$parent" || return "$DOCUMENT_LOCAL_FAILURE"
   [ ! -L "$base" ] && [ ! -L "$parent" ] || return "$DOCUMENT_LOCAL_FAILURE"
@@ -436,7 +492,7 @@ fetch_document() { # <id> <remote-relative> <result-var>
   [ ! -L "$destination" ] || return "$DOCUMENT_LOCAL_FAILURE"
   err=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-remote-doc-reason.XXXXXX") || return "$DOCUMENT_LOCAL_FAILURE"
   tmp=$(umask 077; mktemp "$parent/.remote-doc.XXXXXX") || { rm -f -- "$err"; return "$DOCUMENT_LOCAL_FAILURE"; }
-  "$SCRIPT_DIR/fm-on.sh" "$id" fm-remote-file.sh get "$rel" "$MAX_DOC_BYTES" < /dev/null > "$tmp" 2> "$err" || rc=$?
+  "$SCRIPT_DIR/fm-on.sh" "${REPLY_ROUTE[@]}" fm-remote-file.sh get "$rel" "$MAX_DOC_BYTES" < /dev/null > "$tmp" 2> "$err" || rc=$?
   if [ "$rc" -ne 0 ]; then
     FETCH_DOC_REASON=$(summarize_fetch_reason "$err" "$rel")
     rm -f -- "$tmp" "$err"
@@ -446,7 +502,11 @@ fetch_document() { # <id> <remote-relative> <result-var>
   rm -f -- "$err"
   chmod 600 "$tmp" || { rm -f -- "$tmp"; return "$DOCUMENT_LOCAL_FAILURE"; }
   mv -f -- "$tmp" "$destination" || { rm -f -- "$tmp"; return "$DOCUMENT_LOCAL_FAILURE"; }
-  local_rel="data/remote-secondmates/$id/$rel"
+  if [ "$REPLY_WORKER" = 1 ]; then
+    local_rel=$rel
+  else
+    local_rel="data/remote-secondmates/$id/$rel"
+  fi
   printf -v "$result_var" '%s' "$local_rel"
 }
 
@@ -535,6 +595,7 @@ cmd_ingest() {
   payload_hash=$(result_field "$result" payload_sha256) || die "result payload hash is ambiguous"
   payload_bytes=$(result_field "$result" payload_bytes) || die "result payload size is ambiguous"
   reason=$(result_field "$result" reason) || die "result reason is ambiguous"
+  reply_route "$id"
   [ "$schema" = fm-remote-delta.v1 ] && [ "$path" = "$REMOTE_LOG" ] || die "result identifies the wrong source"
   case "$from$to$payload_bytes" in *[!0-9]*) die "result carries a nonnumeric size or offset" ;; esac
   for hash in "$from_hash" "$to_hash" "$payload_hash"; do

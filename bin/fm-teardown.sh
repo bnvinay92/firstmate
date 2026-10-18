@@ -1114,6 +1114,115 @@ remote_secondmate_teardown_locked() {
   return "$rc"
 }
 
+# A ship or scout worker placed on a worker machine (remote_kind=worker;
+# docs/remote-workers.md) is cleaned up THERE: the machine runs this same script
+# against the worker's host-local record, so the landed-work test reads the
+# machine's own worktree, branch refs, and forge login, and the slot is
+# returned to the machine's own pool. Only once that succeeds does this home
+# retire the status mirror, close or retain the backlog item exactly as the
+# local path does, and remove its own record. A scout's report is copied here
+# first when the mirror has not already delivered it, and a report that cannot
+# be copied refuses unless --force. SSH exit 255 preserves every record here,
+# because whether the machine finished is unknown.
+remote_worker_teardown() {
+  local machine kind mode pr_url report rel data_relative out rc meta_spawn_gen lock marker tmp
+  local -a done_args flags
+  [ "$(fm_meta_get "$META" remote_kind)" = worker ] || return 3
+  machine=$(fm_meta_get "$META" remote_machine)
+  kind=$(fm_meta_get "$META" kind)
+  mode=$(fm_meta_get "$META" mode)
+  pr_url=$(fm_meta_get "$META" pr)
+  case "$kind" in ship|scout) ;; *) echo "REFUSED: a placed worker record must be a ship or scout, not '$kind'" >&2; return 1 ;; esac
+  [ -n "$machine" ] || { echo "REFUSED: placed worker $ID records no machine" >&2; return 1; }
+  if [ "$kind" = scout ]; then
+    report="$DATA/$ID/report.md"
+    rel="data/$ID/report.md"
+    if [ ! -s "$report" ]; then
+      mkdir -p "$DATA/$ID" || return 1
+      tmp=$(umask 077; mktemp "$DATA/$ID/.report.XXXXXX") || return 1
+      rc=0
+      "$SCRIPT_DIR/fm-on.sh" --machine "$machine" fm-remote-file.sh get "$rel" 1048576 < /dev/null > "$tmp" || rc=$?
+      if [ "$rc" -eq 0 ] && [ -s "$tmp" ]; then
+        mv -f -- "$tmp" "$report" || { rm -f -- "$tmp"; return 1; }
+      else
+        rm -f -- "$tmp"
+        if [ "$FORCE" != --force ]; then
+          echo "REFUSED: scout $ID's report could not be copied from machine $machine (exit $rc); the scratch copy there is kept until the report is here - retry, or pass --force to discard it with the captain's authority" >&2
+          return 1
+        fi
+      fi
+    fi
+  fi
+  lock=$(secondmate_reply_lifecycle_lock_path "$STATE" "$ID")
+  fm_lock_acquire_wait "$lock" || return 1
+  REMOTE_REPLY_LIFECYCLE_LOCK=$lock
+  if ! "$SCRIPT_DIR/fm-procevent-remote-reply.sh" retire-quiesce-locked "$ID" "$FORCE" >/dev/null 2>&1; then
+    echo "REFUSED: placed worker $ID still has an unhandled mirrored status capture; let the mirror apply it, then retry" >&2
+    return 1
+  fi
+  "$FM_ROOT/bin/fm-guard.sh" || true
+  rc=0
+  if [ "$FORCE" = --force ]; then
+    out=$("$SCRIPT_DIR/fm-on.sh" --machine "$machine" fm-remote-worker-control.sh retire "$ID" --force < /dev/null 2>&1) || rc=$?
+  else
+    out=$("$SCRIPT_DIR/fm-on.sh" --machine "$machine" fm-remote-worker-control.sh retire "$ID" < /dev/null 2>&1) || rc=$?
+  fi
+  if [ "$rc" -ne 0 ] && [ "$rc" -ne "$TEARDOWN_LOST_SLOT_EXIT" ]; then
+    [ -z "$out" ] || printf '%s\n' "$out" >&2
+    if [ "$rc" -eq 255 ]; then
+      echo "error: machine $machine did not answer, so whether $ID was cleaned up there is unknown; every record here is kept - retry once the machine is reachable" >&2
+    fi
+    "$SCRIPT_DIR/fm-procevent-remote-reply.sh" arm-locked "$ID" >/dev/null 2>&1 \
+      || echo "error: the status mirror for $ID could not be re-armed after the refused cleanup" >&2
+    return "$rc"
+  fi
+  [ "$rc" -ne "$TEARDOWN_LOST_SLOT_EXIT" ] || printf '%s\n' "$out" | grep -E '^(warning: |  )' >&2 || true
+  "$SCRIPT_DIR/fm-procevent-remote-reply.sh" retire-finalize-locked "$ID" "$FORCE" >/dev/null 2>&1 || {
+    echo "error: $ID was cleaned up on machine $machine but its status mirror could not be retired here; retry teardown" >&2
+    return 1
+  }
+  [ ! -e "$CONFIG/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" cleaned_up "$ID" || true
+  status_retire_presentation_task "$STATE" "$ID" || return 1
+  if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
+    done_args=()
+    if [ "$kind" = scout ]; then
+      data_relative=$(fm_backlog_data_relative "$DATA") || return 1
+      done_args=(--report "$data_relative/$ID/report.md")
+    elif [ -n "$pr_url" ]; then
+      done_args=(--pr "$pr_url")
+    fi
+    flags=()
+    [ "$TEARDOWN_BACKLOG_TRANSITION" = close ] || flags=(--retain)
+    meta_spawn_gen=$TEARDOWN_META_SPAWN_GEN
+    fm_backlog_close_marker_write "$STATE" "$ID" "$DATA" "$meta_spawn_gen" \
+      "${flags[@]+"${flags[@]}"}" "${done_args[@]+"${done_args[@]}"}" || return 1
+    marker=$(fm_backlog_close_marker_path "$STATE" "$ID") || return 1
+    if ! fm_backlog_atomic_transition "$TEARDOWN_BACKLOG_TRANSITION" "$META" "$marker" \
+        "$DATA" "$ID" "$STATE" "${done_args[@]+"${done_args[@]}"}"; then
+      echo "error: $ID was cleaned up on machine $machine, but its backlog item could not be updated atomically ($FM_BACKLOG_TRANSITION_ERROR); the pending change is recorded and the next session start retries it" >&2
+      return 1
+    fi
+  else
+    fm_backlog_atomic_transition remove "$META" "task record" "$STATE" || return 1
+  fi
+  rm -f -- "$STATE/$ID.turn-ended" "$STATE/$ID.progress" \
+    "$(fm_wake_signal_seen_path "$STATE" "$STATE/$ID.turn-ended")"
+  printf 'teardown %s complete (machine %s%s)\n' "$ID" "$machine" "${mode:+, mode $mode}"
+  return "$rc"
+}
+
+if remote_worker_teardown; then
+  remote_worker_rc=0
+else
+  remote_worker_rc=$?
+fi
+remote_teardown_locks_release || true
+if [ "$remote_worker_rc" -eq 0 ] || [ "$remote_worker_rc" -eq "$TEARDOWN_LOST_SLOT_EXIT" ]; then
+  "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+  exit "$remote_worker_rc"
+fi
+[ "$remote_worker_rc" -eq 3 ] || exit "$remote_worker_rc"
+
 if remote_secondmate_teardown_locked; then
   remote_teardown_rc=0
 else

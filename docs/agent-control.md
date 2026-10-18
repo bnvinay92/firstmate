@@ -156,6 +156,7 @@ The worktree and the task's records are unaffected either way.
 - Targeting is exact.
   Only a bare task id with a `state/<id>.meta` record in this home is accepted, and that record must pass the shared endpoint-identity validation.
   A legacy `fm-<id>` window label, an explicit `session:window` endpoint, and a record whose `endpoint_task_id` names another task are all refused.
+- A ship or scout placed on a worker machine is driven on that machine: this same plane runs there against the worker's host-local record, and a `relaunch` republishes this home's record from the route the machine confirmed ([`docs/remote-workers.md`](remote-workers.md)).
 - A remotely placed secondmate is refused by name.
   Its agent runs on another host, so none of the postconditions this plane verifies could be read for it here; local endpoint validation would refuse the record regardless, because `window=remote:<id>` can never match a local backend's required shape.
   Drive that lifecycle on its own host and reconcile it through the secondmate recovery path.

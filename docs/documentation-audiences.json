@@ -314,6 +314,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/remote-workers.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/secondmate-parent-channel.md",
       "audience": "maintainer-architecture"
     },

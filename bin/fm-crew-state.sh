@@ -28,6 +28,9 @@
 #
 # Logic, in order:
 #   1. Resolve worktree + backend target + kind from state/<id>.meta. A meta
+#      recording remote_kind=worker is a placed ship or scout: this script runs
+#      on its machine against the host-local record and that line is relayed,
+#      with unreachable reported as unknown-remote. Any other meta
 #      recording remote_host= is a remote secondmate: its worktree and endpoint
 #      live on that host, so the local worktree and pane reads are skipped and
 #      the remote host is asked for the endpoint's recovery-grade state
@@ -224,6 +227,27 @@ KIND=$(meta_value kind)
 HARNESS=$(meta_value harness)
 REMOTE_HOST=$(meta_value remote_host)
 [ -n "$KIND" ] || KIND=ship
+
+# --- placed ship or scout worker: its machine answers -----------------------
+# A worker placed on a worker machine (remote_kind=worker; docs/remote-workers.md)
+# keeps its pane, busy hooks, worktree, and branch refs on that machine, so this
+# same script runs THERE against the worker's host-local record, where every
+# source above and below is local again, and its one line is relayed here. A
+# machine that cannot answer is unknown, never dead.
+if [ "$(meta_value remote_kind)" = worker ]; then
+  REMOTE_MACHINE=$(meta_value remote_machine)
+  if REMOTE_LINE=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-on.sh" --machine "$REMOTE_MACHINE" \
+    fm-remote-worker-control.sh crew-state "$ID" < /dev/null 2>/dev/null); then
+    REMOTE_LINE=$(printf '%s\n' "$REMOTE_LINE" | grep '^state: ' | tail -n 1)
+  else
+    REMOTE_LINE=
+  fi
+  if [ -n "$REMOTE_LINE" ]; then
+    printf '%s%son machine %s\n' "$REMOTE_LINE" "$SEP" "$REMOTE_MACHINE"
+    exit 0
+  fi
+  emit unknown remote-endpoint "unknown-remote: machine $REMOTE_MACHINE unreachable or its record unreadable (not proof of death)"
+fi
 
 # A torn-down (or never-created) worktree has no current state to read. A
 # remote secondmate's recorded worktree is a path on ITS host, so the local

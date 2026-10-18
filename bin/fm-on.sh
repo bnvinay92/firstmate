@@ -3,11 +3,15 @@
 #
 # Usage:
 #   fm-on.sh [--stdin] <secondmate-id|unambiguous-ssh-alias> <fm-command> [args...]
+#   fm-on.sh [--stdin] --machine <machine-id> <fm-command> [args...]
 #
 # Routes come only from remote records in data/secondmates.md. A record names an
 # SSH config alias, remote Firstmate code root, and remote FM_HOME. A host alias
 # may be used directly only when exactly one record selects it; an ambiguous
-# alias is refused. The command must be a genuine executable in this checkout's
+# alias is refused. --machine instead resolves a worker machine from this home's
+# config/worker-machines (bin/fm-worker-machine-lib.sh owns that registry), whose
+# remote FM_HOME is the machine's worker-host home for individually placed ship
+# and scout workers. The command must be a genuine executable in this checkout's
 # bin/fm-*.sh namespace. No per-command table exists.
 #
 # argv is encoded as one NUL-delimited stream and passed through the fixed
@@ -38,14 +42,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 REG="$DATA/secondmates.md"
 PROTOCOL=1
 
 # shellcheck source=bin/fm-secondmate-registry-lib.sh
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
+# shellcheck source=bin/fm-worker-machine-lib.sh
+. "$SCRIPT_DIR/fm-worker-machine-lib.sh"
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
-usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 encode_base64() {
   base64 | tr -d '\n'
@@ -56,12 +63,17 @@ if [ "${1:-}" = --stdin ]; then
   STDIN_MODE=caller
   shift
 fi
+ROUTE_KIND=secondmate
+if [ "${1:-}" = --machine ]; then
+  ROUTE_KIND=machine
+  shift
+fi
 [ "$#" -ge 2 ] || usage
 ROUTE=$1
 COMMAND=$2
 shift 2
 
-case "$ROUTE" in ''|-*|*[!A-Za-z0-9._-]*) die "remote route must be a safe secondmate id or SSH alias: $ROUTE" ;; esac
+case "$ROUTE" in ''|-*|*[!A-Za-z0-9._-]*) die "remote route must be a safe secondmate id, SSH alias, or machine id: $ROUTE" ;; esac
 case "$COMMAND" in
   fm-*.sh) ;;
   *) die "remote command must be a basename in the fm-*.sh namespace: $COMMAND" ;;
@@ -72,25 +84,31 @@ LOCAL_COMMAND="$FM_ROOT/bin/$COMMAND"
   || die "remote command is not a genuine tracked executable in this Firstmate checkout: $COMMAND"
 git -C "$FM_ROOT" ls-files --error-unmatch "bin/$COMMAND" >/dev/null 2>&1 \
   || die "remote command is not tracked by this Firstmate checkout: $COMMAND"
-[ -f "$REG" ] && [ ! -L "$REG" ] || die "no safe secondmate registry at $REG"
-
 MATCHES=0
 HOST=
 ROOT=
 HOME_PATH=
-while IFS= read -r line || [ -n "$line" ]; do
-  case "$line" in '- '*) ;; *) continue ;; esac
-  secondmate_registry_parse_line "$line" || die "malformed secondmate registry entry: $line"
-  [ "$SECONDMATE_REGISTRY_REMOTE" -eq 1 ] || continue
-  if [ "$SECONDMATE_REGISTRY_ID" = "$ROUTE" ] || [ "$SECONDMATE_REGISTRY_HOST" = "$ROUTE" ]; then
-    MATCHES=$((MATCHES + 1))
-    HOST=$SECONDMATE_REGISTRY_HOST
-    ROOT=$SECONDMATE_REGISTRY_ROOT
-    HOME_PATH=$SECONDMATE_REGISTRY_HOME
-  fi
-done < "$REG"
-[ "$MATCHES" -gt 0 ] || die "no remote secondmate or SSH alias matches '$ROUTE'"
-[ "$MATCHES" -eq 1 ] || die "remote route '$ROUTE' is ambiguous across $MATCHES configured secondmates; use a secondmate id"
+if [ "$ROUTE_KIND" = machine ]; then
+  fm_worker_machine_resolve "$CONFIG" "$ROUTE" || die "$FM_WORKER_MACHINE_ERROR"
+  HOST=$FM_WORKER_MACHINE_HOST
+  ROOT=$FM_WORKER_MACHINE_ROOT
+  HOME_PATH=$FM_WORKER_MACHINE_HOME
+else
+  [ -f "$REG" ] && [ ! -L "$REG" ] || die "no safe secondmate registry at $REG"
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in '- '*) ;; *) continue ;; esac
+    secondmate_registry_parse_line "$line" || die "malformed secondmate registry entry: $line"
+    [ "$SECONDMATE_REGISTRY_REMOTE" -eq 1 ] || continue
+    if [ "$SECONDMATE_REGISTRY_ID" = "$ROUTE" ] || [ "$SECONDMATE_REGISTRY_HOST" = "$ROUTE" ]; then
+      MATCHES=$((MATCHES + 1))
+      HOST=$SECONDMATE_REGISTRY_HOST
+      ROOT=$SECONDMATE_REGISTRY_ROOT
+      HOME_PATH=$SECONDMATE_REGISTRY_HOME
+    fi
+  done < "$REG"
+  [ "$MATCHES" -gt 0 ] || die "no remote secondmate or SSH alias matches '$ROUTE'"
+  [ "$MATCHES" -eq 1 ] || die "remote route '$ROUTE' is ambiguous across $MATCHES configured secondmates; use a secondmate id"
+fi
 case "$HOST" in ''|-*|*[!A-Za-z0-9._-]*) die "configured SSH alias is unsafe: $HOST" ;; esac
 case "$ROOT" in /*) ;; *) die "configured remote root is not absolute: $ROOT" ;; esac
 case "$HOME_PATH" in /*) ;; *) die "configured remote home is not absolute: $HOME_PATH" ;; esac

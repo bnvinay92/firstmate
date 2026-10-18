@@ -41,6 +41,9 @@
 # Occupancy: a place is held by every task record, in any local Firstmate home on
 # this machine (fm_local_firstmate_state_dirs in bin/fm-wake-lib.sh), that
 #   - is not a secondmate, which is a persistent home rather than a worker,
+#   - is not placed on another machine (remote_host=): a placed worker holds a
+#     place in that machine's own count, in its worker-host home there
+#     (docs/remote-workers.md), never in this machine's,
 #   - names the same project identity, meaning its project resolves to the same
 #     shared project lock path (fm_treehouse_project_lock_path), which is keyed
 #     by the project's resolved origin, so workers in any clone of that origin
@@ -203,6 +206,7 @@ fm_project_capacity_occupants() {  # <project-lock> <project-dir> <first-state> 
       }
       kind=$(fm_meta_get "$meta" kind)
       [ "$kind" != secondmate ] || continue
+      [ -z "$(fm_meta_get "$meta" remote_host)" ] || continue
       [ -z "$(fm_meta_get "$meta" pr)" ] || continue
       project=$(fm_meta_get "$meta" project)
       [ -n "$project" ] || continue

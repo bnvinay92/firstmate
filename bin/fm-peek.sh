@@ -6,8 +6,11 @@
 # A selector whose meta records remote_host= is a remote secondmate: its pane
 # lives on that host, so the capture routes over fm-on.sh to the host-local
 # capture (fm-remote-secondmate-control.sh), clamped to that command's
-# 100-line cap. An unreachable host or unreadable endpoint fails loudly naming
-# the host; the local backend adapters are never asked to read a remote target.
+# 100-line cap. A placed ship or scout worker (remote_kind=worker) is read the
+# same way through its machine route and fm-remote-worker-control.sh
+# (bin/fm-remote-worker-lib.sh owns that choice). An unreachable host or
+# unreadable endpoint fails loudly naming the host; the local backend adapters
+# are never asked to read a remote target.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,6 +20,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-remote-worker-lib.sh
+. "$SCRIPT_DIR/fm-remote-worker-lib.sh"
 
 "$SCRIPT_DIR/fm-guard.sh" || true
 
@@ -30,9 +35,10 @@ if [ -n "$REMOTE_META" ] && [ -n "$(fm_meta_get "$REMOTE_META" remote_host)" ]; 
   REMOTE_HOST=$(fm_meta_get "$REMOTE_META" remote_host)
   case "$N" in ''|*[!0-9]*|0) N=40 ;; esac
   [ "$N" -le 100 ] || N=100
-  if ! FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-on.sh" "$REMOTE_ID" \
-    fm-remote-secondmate-control.sh capture "$REMOTE_ID" "$N" < /dev/null; then
-    echo "error: could not read the remote pane of $REMOTE_ID on $REMOTE_HOST (host unreachable or endpoint unreadable; the mate is not thereby dead)" >&2
+  fm_remote_route_for_meta "$REMOTE_META" "$REMOTE_ID"
+  if ! FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-on.sh" "${FM_REMOTE_ROUTE[@]}" \
+    capture "$REMOTE_ID" "$N" < /dev/null; then
+    echo "error: could not read the remote pane of $REMOTE_ID on $REMOTE_HOST (host unreachable or endpoint unreadable; the task is not thereby dead)" >&2
     exit 1
   fi
   exit 0

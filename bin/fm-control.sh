@@ -349,6 +349,62 @@ fi
 # cannot say is WHY, and "malformed metadata" is the wrong thing to tell an
 # operator about a correctly configured remote route. Name the placement
 # instead, using the same `remote_host` signal bin/fm-send.sh routes on.
+# A placed ship or scout worker (remote_kind=worker; docs/remote-workers.md) is
+# the exception that IS controllable from here: its machine runs this same
+# control plane against the worker's host-local record, where every
+# postcondition is local again, and a relaunch's confirmed route is
+# republished into this home's record. SSH exit 255 means completion is
+# unknown and changes nothing here.
+# shellcheck source=bin/fm-remote-worker-lib.sh
+. "$SCRIPT_DIR/fm-remote-worker-lib.sh"
+if fm_remote_worker_meta "$META"; then
+  REMOTE_MACHINE=$FM_REMOTE_WORKER_MACHINE
+  remote_rc=0
+  if [ "$VERB" != relaunch ]; then
+    "$SCRIPT_DIR/fm-on.sh" --machine "$REMOTE_MACHINE" fm-remote-worker-control.sh \
+      control "$ID" "$VERB" < /dev/null || remote_rc=$?
+    [ "$remote_rc" -ne 255 ] || die "machine $REMOTE_MACHINE did not answer; whether task $ID's $VERB took effect is unknown - check it with bin/fm-crew-state.sh $ID before retrying"
+    [ "$remote_rc" -eq 0 ] || die "task $ID's $VERB failed on machine $REMOTE_MACHINE (its output is above)"
+    exit 0
+  fi
+  [ "$NOTE_SET" = 1 ] && [ -n "$NOTE" ] || die "relaunch of placed worker $ID requires --note or --note-file with its progress so far"
+  REMOTE_HARNESS=${NEW_HARNESS:-$(fm_meta_get "$META" harness)}
+  REMOTE_MODEL=${NEW_MODEL:-}
+  [ "$MODEL_SET" = 1 ] || REMOTE_MODEL=$(fm_meta_get "$META" model)
+  REMOTE_EFFORT=${NEW_EFFORT:-}
+  [ "$EFFORT_SET" = 1 ] || REMOTE_EFFORT=$(fm_meta_get "$META" effort)
+  REMOTE_ROUTE_OUT=$(printf '%s\n' "$NOTE" | "$SCRIPT_DIR/fm-on.sh" --stdin --machine "$REMOTE_MACHINE" \
+    fm-remote-worker-control.sh control "$ID" relaunch "$REMOTE_HARNESS" \
+    "${REMOTE_MODEL:--}" "${REMOTE_EFFORT:--}") || remote_rc=$?
+  [ "$remote_rc" -ne 255 ] || die "machine $REMOTE_MACHINE did not answer; whether task $ID relaunched is unknown - check it with bin/fm-crew-state.sh $ID before retrying"
+  [ "$remote_rc" -eq 0 ] || die "task $ID's relaunch failed on machine $REMOTE_MACHINE (its output is above)"
+  remote_route_value() { printf '%s\n' "$REMOTE_ROUTE_OUT" | sed -n "s/^$1=//p" | tail -n 1; }
+  [ -n "$(remote_route_value target)" ] && [ -n "$(remote_route_value spawn_gen)" ] \
+    || die "task $ID relaunched on machine $REMOTE_MACHINE but returned no route; reconcile this home's record from fm-remote-worker-control.sh route $ID"
+  REMOTE_META_LOCK=$(fm_meta_lock_path "$META") || die "could not resolve the record lock for $ID"
+  fm_lock_acquire_wait "$REMOTE_META_LOCK"
+  remote_meta_tmp="$STATE/.$ID.meta.relaunch.$$"
+  {
+    grep -vE '^(remote_target|remote_backend|worktree|spawn_gen|harness|model|effort)=' "$META" || true
+    printf 'worktree=%s\n' "$(remote_route_value worktree)"
+    printf 'harness=%s\n' "$(remote_route_value harness)"
+    printf 'model=%s\n' "$(remote_route_value model)"
+    printf 'effort=%s\n' "$(remote_route_value effort)"
+    printf 'spawn_gen=%s\n' "$(remote_route_value spawn_gen)"
+    printf 'remote_backend=%s\n' "$(remote_route_value backend)"
+    printf 'remote_target=%s\n' "$(remote_route_value target)"
+  } > "$remote_meta_tmp" || remote_rc=$?
+  [ "$remote_rc" -ne 0 ] || mv -f -- "$remote_meta_tmp" "$META" || remote_rc=$?
+  if [ "$remote_rc" -ne 0 ]; then
+    rm -f -- "$remote_meta_tmp"
+    fm_lock_release "$REMOTE_META_LOCK" || true
+    die "task $ID relaunched on machine $REMOTE_MACHINE but this home's record could not be republished"
+  fi
+  fm_lock_release "$REMOTE_META_LOCK" || true
+  echo "relaunched $ID on machine $REMOTE_MACHINE ($(remote_route_value target))"
+  exit 0
+fi
+
 if [ -n "$(fm_meta_get "$META" remote_host)" ]; then
   die "task $ID is a remotely placed secondmate on $(fm_meta_get "$META" remote_host); its agent runs outside this home, so no lifecycle action here could verify that it interrupted, stopped, or came back. Drive its lifecycle on that host, and reconcile it through the secondmate recovery path rather than this plane"
 fi
