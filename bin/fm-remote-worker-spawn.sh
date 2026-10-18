@@ -182,15 +182,12 @@ else
   echo "warning: machine $MACHINE code root sync skipped before launch: this home's default-branch commit cannot be resolved" >&2
 fi
 
-if ! PAYLOAD=$(fm_remote_worker_claude_payload "$CONFIG"); then
-  die "the worker machine needs a Claude login and none is usable here: $FM_REMOTE_ACCOUNT_ERROR"
-fi
 rc=0
-out=$(printf '%s\n' "$PAYLOAD" | "$SCRIPT_DIR/fm-on.sh" --stdin --machine "$MACHINE" \
-  fm-remote-worker-control.sh account claude 2>&1) || rc=$?
-PAYLOAD=
+fm_remote_worker_install_account "$SCRIPT_DIR" "$CONFIG" "$MACHINE" || rc=$?
 [ "$rc" -ne 255 ] || unknown "the account install"
-[ "$rc" -eq 0 ] || { printf '%s\n' "$out" >&2; die "the Claude login could not be installed on machine $MACHINE"; }
+[ -z "$FM_REMOTE_ACCOUNT_ERROR" ] \
+  || die "the worker machine needs a Claude login and none is usable here: $FM_REMOTE_ACCOUNT_ERROR"
+[ "$rc" -eq 0 ] || die "the Claude login could not be installed on machine $MACHINE (its reason is above)"
 
 rc=0
 out=$(remote prepare "$PROJ_NAME" "$ORIGIN" "$REG_LINE" 2>&1) || rc=$?

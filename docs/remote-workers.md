@@ -75,7 +75,9 @@ At every placement the worker machine signs in with the Claude account this mach
 
 - When this home pins an account in `config/claude-account`, that account is used; otherwise the account Claude would launch with here, which is `CLAUDE_CONFIG_DIR` when it is set and Claude's default login otherwise.
 - The credentials come from that account's `.credentials.json`, or on macOS from the login keychain entry Claude Code keeps for it.
-- Only the Claude OAuth credential object and the account profile travel, over the same SSH transport, on standard input; they never appear in a command line, a status line, or a log.
+- Only the Claude OAuth credential object, the account profile, its onboarding and theme state, and that account's own acknowledgement of the bypass permission prompt travel, over the same SSH transport, on standard input; they never appear in a command line, a status line, or a log.
+  The acknowledgement travels only when the captain already gave it on this machine, so a worker launched in bypass mode there is not stopped at a prompt nobody can answer.
+- A relaunch through `fm-control.sh` installs the current login again before it restarts the worker.
 - On the worker machine they are written into an owner-only Claude config root under the worker-host home (directory mode 0700, files 0600), which that home's `config/claude-account` pins for every launch there.
 
 ### Security boundary

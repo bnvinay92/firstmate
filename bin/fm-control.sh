@@ -368,6 +368,14 @@ if fm_remote_worker_meta "$META"; then
     exit 0
   fi
   [ "$NOTE_SET" = 1 ] && [ -n "$NOTE" ] || die "relaunch of placed worker $ID requires --note or --note-file with its progress so far"
+  # A relaunch is a launch: the machine signs in with the account this
+  # machine is using now (bin/fm-remote-worker-lib.sh owns which one).
+  # shellcheck source=bin/fm-worker-machine-lib.sh
+  . "$SCRIPT_DIR/fm-worker-machine-lib.sh"
+  fm_remote_worker_install_account "$SCRIPT_DIR" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" "$REMOTE_MACHINE" || remote_rc=$?
+  [ "$remote_rc" -ne 255 ] || die "machine $REMOTE_MACHINE did not answer while its Claude login was refreshed; nothing was relaunched"
+  [ -z "$FM_REMOTE_ACCOUNT_ERROR" ] || die "the worker machine needs a Claude login and none is usable here: $FM_REMOTE_ACCOUNT_ERROR"
+  [ "$remote_rc" -eq 0 ] || die "the Claude login could not be installed on machine $REMOTE_MACHINE; nothing was relaunched"
   REMOTE_HARNESS=${NEW_HARNESS:-$(fm_meta_get "$META" harness)}
   REMOTE_MODEL=${NEW_MODEL:-}
   [ "$MODEL_SET" = 1 ] || REMOTE_MODEL=$(fm_meta_get "$META" model)

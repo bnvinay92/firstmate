@@ -46,7 +46,8 @@
 # an unsafe or unreachable target is reported and left untouched.
 #
 # account installs the spawning home's current Claude login: stdin is one JSON
-# object {"claudeAiOauth":{...},"oauthAccount":{...}}. It is written into an
+# object {"claudeAiOauth":{...},"oauthAccount":{...},"config":{...},"settings":{...}}
+# (bin/fm-remote-worker-lib.sh owns which keys travel). It is written into an
 # owner-only (0700 directory, 0600 files) Claude config root under the
 # worker-host home, which config/claude-account then pins for every launch
 # here (bin/fm-worker-account-lib.sh). Nothing is printed from the payload.
@@ -201,18 +202,23 @@ cmd_account() {
   fi
   (umask 077; jq '{claudeAiOauth: .claudeAiOauth}' "$payload" > "$tmp/credentials") \
     || { rm -rf -- "$tmp"; die "cannot stage the worker credentials"; }
-  if [ -f "$ACCOUNT_ROOT/.claude.json" ] && [ ! -L "$ACCOUNT_ROOT/.claude.json" ]; then
-    (umask 077; jq --slurpfile p "$payload" \
-      '.oauthAccount = $p[0].oauthAccount | .hasCompletedOnboarding = true' \
-      "$ACCOUNT_ROOT/.claude.json" > "$tmp/config") \
-      || { rm -rf -- "$tmp"; die "cannot update the worker account config"; }
-  else
-    (umask 077; jq '{oauthAccount: .oauthAccount, hasCompletedOnboarding: true, theme: "dark"}' \
-      "$payload" > "$tmp/config") || { rm -rf -- "$tmp"; die "cannot stage the worker account config"; }
-  fi
-  chmod 600 "$tmp/credentials" "$tmp/config" || { rm -rf -- "$tmp"; die "cannot restrict the worker account files"; }
+  # Existing keys (such as the trust records each launch adds) are kept; the
+  # carried profile, onboarding, and theme state replace their own keys only.
+  [ -f "$ACCOUNT_ROOT/.claude.json" ] && [ ! -L "$ACCOUNT_ROOT/.claude.json" ] \
+    || printf '{"hasCompletedOnboarding":true,"theme":"dark"}\n' > "$tmp/base-config"
+  [ -f "$tmp/base-config" ] || cp -- "$ACCOUNT_ROOT/.claude.json" "$tmp/base-config"
+  (umask 077; jq --slurpfile p "$payload" \
+    '. + ($p[0].config // {}) + {oauthAccount: $p[0].oauthAccount}' \
+    "$tmp/base-config" > "$tmp/config") || { rm -rf -- "$tmp"; die "cannot stage the worker account config"; }
+  [ -f "$ACCOUNT_ROOT/settings.json" ] && [ ! -L "$ACCOUNT_ROOT/settings.json" ] \
+    && cp -- "$ACCOUNT_ROOT/settings.json" "$tmp/base-settings" || printf '{}\n' > "$tmp/base-settings"
+  (umask 077; jq --slurpfile p "$payload" \
+    '. + {skipDangerousModePermissionPrompt: (($p[0].settings // {}).skipDangerousModePermissionPrompt == true)}' \
+    "$tmp/base-settings" > "$tmp/settings") || { rm -rf -- "$tmp"; die "cannot stage the worker account settings"; }
+  chmod 600 "$tmp/credentials" "$tmp/config" "$tmp/settings" || { rm -rf -- "$tmp"; die "cannot restrict the worker account files"; }
   mv -f -- "$tmp/credentials" "$ACCOUNT_ROOT/.credentials.json" || { rm -rf -- "$tmp"; die "cannot install the worker credentials"; }
   mv -f -- "$tmp/config" "$ACCOUNT_ROOT/.claude.json" || { rm -rf -- "$tmp"; die "cannot install the worker account config"; }
+  mv -f -- "$tmp/settings" "$ACCOUNT_ROOT/settings.json" || { rm -rf -- "$tmp"; die "cannot install the worker account settings"; }
   rm -rf -- "$tmp"
   if ! (umask 077; printf '%s\n' "$ACCOUNT_ROOT" > "$CONFIG/.claude-account.tmp") ||
     ! mv -f -- "$CONFIG/.claude-account.tmp" "$CONFIG/claude-account"; then

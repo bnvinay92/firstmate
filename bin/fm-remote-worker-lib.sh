@@ -18,9 +18,13 @@
 # default). Credentials come from <root>/.credentials.json when present, else
 # from the macOS login keychain entry Claude Code itself keeps ("Claude
 # Code-credentials", suffixed with the first 8 hex digits of the SHA-256 of the
-# config root when CLAUDE_CONFIG_DIR selects one). Only the claudeAiOauth object
-# and the account's oauthAccount profile are carried; secrets travel on stdin,
-# never in argv or a log.
+# config root when CLAUDE_CONFIG_DIR selects one). Carried are the claudeAiOauth
+# object, the account's oauthAccount profile, the onboarding and theme state that
+# keeps a fresh root from opening first-run screens, and that account's own
+# skipDangerousModePermissionPrompt acknowledgement, so a worker launched in the
+# bypass permission mode the captain already accepted here is not stopped at
+# that prompt there. Nothing else from either file travels. Secrets travel on
+# stdin, never in argv or a log.
 #
 # Requires bin/fm-backend.sh (fm_meta_get) to be sourced first.
 
@@ -71,7 +75,7 @@ fm_remote_account_sha256_8() { # <text>
 # Print the remote account payload for the claude runner on stdout.
 # Returns 1 with FM_REMOTE_ACCOUNT_ERROR when no usable login is found.
 fm_remote_worker_claude_payload() { # <config-dir>
-  local config=$1 resolved root='' cfg creds='' service
+  local config=$1 resolved root='' cfg creds='' service settings
   FM_REMOTE_ACCOUNT_ERROR=
   if ! resolved=$(fm_worker_account_resolve claude "$config"); then
     FM_REMOTE_ACCOUNT_ERROR="this home's config/claude-account pin does not resolve"
@@ -105,11 +109,33 @@ fm_remote_worker_claude_payload() { # <config-dir>
     FM_REMOTE_ACCOUNT_ERROR="no Claude account profile at $cfg; sign in with /login, then retry"
     return 1
   }
-  if ! { printf '%s\n' "$creds"; jq -c '{oauthAccount: .oauthAccount}' "$cfg"; } \
+  settings="${root:-$HOME/.claude}/settings.json"
+  if ! { printf '%s\n' "$creds"
+         jq -c '{oauthAccount, hasCompletedOnboarding, lastOnboardingVersion, theme}' "$cfg"
+         jq -c '{skipDangerousModePermissionPrompt: (.skipDangerousModePermissionPrompt == true)}' "$settings" 2>/dev/null \
+           || printf '{"skipDangerousModePermissionPrompt":false}\n'
+       } \
     | jq -se 'if (.[0].claudeAiOauth | type) == "object" and (.[1].oauthAccount | type) == "object"
-              then {claudeAiOauth: .[0].claudeAiOauth, oauthAccount: .[1].oauthAccount}
+              then {claudeAiOauth: .[0].claudeAiOauth,
+                    oauthAccount: .[1].oauthAccount,
+                    config: (.[1] | del(.oauthAccount) | with_entries(select(.value != null))),
+                    settings: .[2]}
               else error("incomplete") end' 2>/dev/null; then
     FM_REMOTE_ACCOUNT_ERROR="the Claude login for ${root:-the default Claude account} is not an OAuth subscription login; sign in with /login, then retry"
     return 1
   fi
+}
+
+# Install this machine's current Claude login on <machine> through its
+# account verb. Returns the transport's status: 0 installed, 255 completion
+# unknown, anything else refused; FM_REMOTE_ACCOUNT_ERROR names a refusal that
+# happened here, and the remote leg's own reason goes to stderr.
+fm_remote_worker_install_account() { # <bin-dir> <config-dir> <machine>
+  local bin=$1 config=$2 machine=$3 payload rc=0
+  FM_REMOTE_ACCOUNT_ERROR=
+  payload=$(fm_remote_worker_claude_payload "$config") || return 1
+  printf '%s\n' "$payload" | "$bin/fm-on.sh" --stdin --machine "$machine" \
+    fm-remote-worker-control.sh account claude >/dev/null || rc=$?
+  payload=
+  return "$rc"
 }
