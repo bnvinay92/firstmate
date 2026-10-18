@@ -435,6 +435,13 @@ assert_grep 'branch=fm/ship1' "$PARENT/state/ship1.meta" "the ship's branch was 
 assert_grep 'Delivery contract: mode=direct-PR' "$WHH/data/ship1/brief.md" "the machine's ship brief has no delivery contract"
 [ "$(jq -r '.claudeAiOauth.accessToken' "$CREDS")" = tok-switched ] \
   || fail "a switched account did not reach the machine on the next placement"
+# Ship-done acceptance runs where the copy lives: the fixture copy on the
+# machine is not a git checkout, so the machine's own refusal comes back.
+if out=$(w_env "$ROOT/bin/fm-on.sh" --machine pc fm-remote-worker-control.sh accept-done ship1 \
+  'done: PR https://github.com/example/alpha/pull/7' 2>&1); then
+  fail "the machine accepted a done report it could not verify"
+fi
+assert_contains "$out" "named head cannot be verified" "ship-done acceptance did not run against the machine's copy"
 w_env "$ROOT/bin/fm-teardown.sh" ship1 > "$TMP_ROOT/ship-td.out" 2>&1 \
   || fail "cleaning up the placed ship failed: $(cat "$TMP_ROOT/ship-td.out")"
 assert_absent "$PARENT/state/ship1.meta" "ship cleanup left this home's record"
