@@ -97,6 +97,8 @@ Also report verdict captain for:
 Keep an unsolicited routine outcome as verdict routine, including a healthy result that was not requested by the captain.
 Keep an unchanged fleet review silent as instructed above.
 When genuinely in doubt, choose captain: a spurious escalation costs a glance, a swallowed one costs trust.
+An outcome whose whole substance a [main] mirror message already put to the captain - the same question, decision, blocker, or result for the same unchanged situation - is verdict routine, not silent: the captain already has it, and the answer reaches MAIN directly.
+Anything the mirror message did not carry keeps the outcome captain, such as a changed option, a new failure, a later step, or a PR URL MAIN did not give.
 Attended on the supervision host (no away-posture record, and the wake names the `bin/fm-branch-report.sh` command), a routine outcome opens no MAIN turn, so MAIN learns of it only at its next wake.
 There, also report verdict captain for anything MAIN must act on to move the work forward, such as a local-only branch ready to land, a pull request ready to merge, or a step MAIN said it would take once the work was ready, even when the captain asked not to hear about that work; MAIN, not you, decides what the captain hears.
 Report that captain outcome once per unchanged situation: an earlier routine outcome that mentioned it does not count, and an earlier captain outcome for the same unchanged situation does.

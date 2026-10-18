@@ -309,7 +309,7 @@ The host checks the boundary on every loop pass, so closes that are already wait
 It also starts no engine turn that could still be running at the boundary (the turn bound plus the engine grace).
 It judges this when the close arrives and again just before the turn starts.
 When it declines such a turn, that close reaches main ahead of the boundary line instead, and its wake stays durable in the queue.
-One short main turn per boundary is the cost of never losing the park silently.
+One short main turn per boundary, even with an empty queue, is the cost of never losing the park silently: on Claude and Cursor a park lives only inside a turn-end hook, and only that hook's exit can wake an idle main.
 
 ### Codex checkpoint bound
 

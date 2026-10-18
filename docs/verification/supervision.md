@@ -849,9 +849,10 @@ tests/fm-branch-supervision.test.sh
 
 ### Routine PR outcomes
 
-This supports [Routine PR outcomes](../configuration.md#routine-pr-outcomes-configroutine-pr-outcomes): under `config/routine-pr-outcomes` a parked pull request's ready line, a landed merge whose cleanup completed or whose task is still working, an inactive parked pull request, and a bodiless review in any state stay off main, and without the file each still reaches main.
+This supports [Routine PR outcomes](../configuration.md#routine-pr-outcomes-configroutine-pr-outcomes): under `config/routine-pr-outcomes` a parked pull request's ready line, a landed merge whose cleanup completed or whose task is still working, an inactive parked pull request, a bodiless review in any state, and an automated review leaving no open finding stay off main, and without the file each still reaches main.
 Every verdict here is a file, queue, or status-line fact the scripts read, with no harness-rendered signal, so the deterministic suites below are the proof; no live engine turn was run.
 It was measured on 2026-10-16, and re-run after the still-working, any-state review, and offer-reads-the-gate changes, on macOS 26.6.2 arm64 with GNU bash 5.3.3 and Node 23.11.0, through the real host, watcher, report surface, outcome store, reconciler, and contribution poll, with a stub engine and a stand-in `gh`.
+The contribution poll was re-run on 2026-10-18 after the automated-review change, on the same platform with jq 1.7.1.
 
 ```text
 $ tests/fm-supervision-host.test.sh
@@ -861,6 +862,7 @@ ok - host: under the opt-in a parked PR's ready line and its merge-landed check 
 $ tests/fm-inactive-reconcile.test.sh
 ok - routine PR outcomes keep only a parked done ship's presentation off main
 $ tests/fm-contributions.test.sh
+ok - routine PR outcomes settle an automated review with zero or only resolved findings, and nothing else
 ok - routine PR outcomes settle only bodiless reviews, in any state, and only when opted in
 ```
 
