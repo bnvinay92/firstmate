@@ -1154,7 +1154,8 @@ Per-machine Cursor `cli-config.json` attribution-off is not this contract: it do
 
 ## Project capacity (config/project-capacity)
 
-The optional local, gitignored `config/project-capacity` tells Firstmate how many workers a project can run at once on this machine, for a project whose machine-local resource - a heavy test suite, a local editor stack, a device - only serves a few workers at a time.
+The optional local, gitignored `config/project-capacity` tells Firstmate how many workers a project can run at once on this machine, for a project whose machine-local resource - a local editor stack, a device, a service with a fixed number of slots - only serves a few workers at a time.
+It is for resources other than memory and disk: a worker count cannot follow memory or disk load that every project shares, so bound that with [spawn headroom](#spawn-headroom-configspawn-headroom) instead.
 Without it, dispatch stays uncapped as `AGENTS.md` section 7 describes, and a surplus worker is launched only to spend full-context turns waiting for the resource.
 The file lives in the machine's root Firstmate home, so every local secondmate home reads the same limit, and it holds one line per project:
 
@@ -1174,6 +1175,41 @@ When every place is held, `bin/fm-spawn.sh` launches nothing, creates no record,
 A malformed or unreadable file refuses every fresh ship or scout spawn until it is fixed, rather than guessing the intended limit, and so does a local home's state directory or task record that cannot be read while counting a capped project's holders.
 Firstmate cannot see which part of a worker's life uses the resource, so the number bounds whole workers from launch to handoff, and the tightest resource every worker needs should decide it.
 [`bin/fm-project-capacity-lib.sh`](../bin/fm-project-capacity-lib.sh) owns the file format, what holds a place, and why concurrent spawns cannot both take the last one.
+
+## Spawn headroom (config/spawn-headroom)
+
+The optional local, gitignored `config/spawn-headroom` is how a machine bounds the memory and disk load of its workers, both when a worker is launched and when a running worker starts heavy local work.
+While it is present, every fresh ship or scout spawn first asks [headroom-axi](https://github.com/bnvinay92/headroom-axi) whether the machine has room for one more worker, and is deferred while it does not; every running worker checks the same thresholds before it starts a heavy build, test suite, emulator, or simulator, and waits while the machine is short.
+Without it nothing is measured, dispatch is unchanged, and briefs carry no headroom instruction.
+The file lives in the machine's root Firstmate home, like `config/project-capacity`, so every local secondmate home is measured against the same thresholds, and it holds one `<key> <value>` setting per line:
+
+```text
+# defer a fresh worker below 4G available memory or 30G free disk, or under memory pressure warn or worse
+min-ram 4G
+min-disk 30G
+pressure warn
+max-wait 30
+```
+
+`min-ram` and `min-disk` are sizes such as `4G` or `512M` passed to `headroom-axi check`, which compares them with available memory and free disk on the data volume; at least one is required.
+`pressure` is optional and is `warn` or `critical`: the spawn is also deferred while the kernel's memory pressure is at or above that level, whatever available memory says, and without it pressure alone never defers.
+`max-wait` is optional, a whole number of minutes that defaults to 30, and bounds only a running worker's wait.
+Blank lines and lines starting with `#` are ignored.
+A deferred spawn launches nothing, creates no record, leaves the backlog item queued, prints one `deferred:` line carrying headroom-axi's verdict, which names the largest memory or disk consumers, and exits 75, exactly like a capacity deferral.
+Firstmate retries it at its ordinary queue re-evaluation after a cleanup and at each heartbeat, so a short machine is measured once per dispatch attempt and never polled.
+The verdict measures the moment of the spawn, and a worker admitted a moment earlier has not yet started its build, so leave margin in the minimums for workers dispatched together, such as a batch.
+When headroom-axi is not installed, jq is missing, or headroom-axi errors, times out, or prints no readable verdict, the spawn is admitted with a `warning:` line naming the problem rather than deferred, because a deferral is retried indefinitely and a broken measurement would otherwise hold every fresh spawn on the machine queued; any project capacity still applies.
+A malformed or unreadable file refuses every fresh ship or scout spawn until it is fixed, rather than guessing the intended thresholds.
+A relaunch of an existing task and a secondmate launch are never measured.
+
+Running workers reach the same verdict through `bin/fm-headroom-gate.sh`.
+While the file exists, every generated ship and scout brief gains a short "Machine headroom" section naming the gate command for that home.
+Before a heavy build, test suite, emulator, or simulator, the worker runs the gate: on go it starts the work, and on wait it does not start it, declares one `paused:` line carrying headroom-axi's verdict and the latest time it will wait, and stays in the gate's own bounded `--wait` command, rerunning it until the gate says go, then records `resolved:`.
+Firstmate gains no poller: the wait is the worker's own declared wait, re-measured once a minute.
+The gate only decides whether to start work, so it never stops or interrupts a build already running.
+A worker that has waited `max-wait` minutes starts its work anyway, so waiting workers cannot starve each other, for example while their own idle build daemons hold the memory they wait for; the paused line names the largest consumers, so Firstmate can free memory sooner.
+A missing or failing headroom-axi, or an unreadable file, lets the worker start, with the gate's line naming the problem, matching spawn admission; only spawn refuses an unreadable file, because a running worker cannot fix it.
+[`bin/fm-spawn-headroom-lib.sh`](../bin/fm-spawn-headroom-lib.sh) owns the file format and the verdict, and [`bin/fm-headroom-gate.sh`](../bin/fm-headroom-gate.sh) owns the running worker's check, its exit codes, and its bounded wait.
 
 ## Crew dispatch profiles (config/crew-dispatch.json)
 
