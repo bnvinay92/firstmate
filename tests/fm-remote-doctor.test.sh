@@ -887,3 +887,87 @@ assert_contains "$DOCTOR_OUT" 'check entrypoint-link=human:' "an operator-owned 
 unset FM_ROOT_OVERRIDE
 pass "the entrypoint symlink is recreated when absent and never overwritten when operator-owned"
 
+# --- a worker machine requires headroom-axi, and --fix installs it with npm --
+
+# install_fake_npm <prefix>: an npm whose global install writes a headroom-axi
+# that measures, and which records every install it was asked for.
+install_fake_npm() {
+  local prefix=$1
+  cat > "$CASE_BIN/npm" <<SH
+#!/usr/bin/env bash
+case "\$1 \${2:-}" in
+  "install -g")
+    printf 'install %s\n' "\$3" >> '$CASE_STATE/npm.log'
+    mkdir -p '$prefix/bin'
+    printf '%s\n' '#!/usr/bin/env bash' \
+      "printf '%s\\\\n' '{\"ok\":true,\"line\":\"ok: 9.8G available\",\"ram\":{\"pressure\":\"normal\"}}'" \
+      > '$prefix/bin/headroom-axi'
+    chmod +x '$prefix/bin/headroom-axi'
+    ;;
+  "prefix -g") printf '%s\n' '$prefix' ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$CASE_BIN/npm"
+}
+
+new_case Linux with-herdr no-gui
+printf 'true\n' > "$CASE_HERDR_RUNNING"
+doctor
+expect_code 0 "$DOCTOR_RC" "a ready linux host stopped being ready for a remote secondmate"
+assert_not_contains "$DOCTOR_OUT" 'headroom-axi' "a remote secondmate host was asked for headroom-axi"
+doctor --worker-machine
+expect_code 1 "$DOCTOR_RC" "a worker machine without headroom-axi was reported ready"
+assert_contains "$DOCTOR_OUT" 'required headroom-axi=MISSING' "the missing headroom-axi was not a required tool"
+assert_contains "$DOCTOR_OUT" 'error: this host is not ready as a worker machine' "the refusal did not name the worker-machine role"
+if ! PATH="$BASE_PATH" command -v npm >/dev/null 2>&1; then
+  assert_contains "$DOCTOR_OUT" 'check headroom-axi=human: headroom-axi is not installed and npm does not resolve' \
+    "a host without npm was not left to a person"
+  assert_contains "$DOCTOR_OUT" 'action: headroom-axi: install Node.js' "the npm gap came with no operator step"
+fi
+NPM_PREFIX="$CASE_DIR/npm-global"
+install_fake_npm "$NPM_PREFIX"
+doctor --worker-machine
+expect_code 1 "$DOCTOR_RC" "a worker machine without headroom-axi was reported ready"
+assert_contains "$DOCTOR_OUT" 'check headroom-axi=fixable: headroom-axi is not installed' "a missing headroom-axi with npm was not fixable"
+assert_absent "$CASE_STATE/npm.log" "the read-only run installed a package"
+doctor --worker-machine --fix
+expect_code 0 "$DOCTOR_RC" "--fix did not make the worker machine ready"
+assert_contains "$DOCTOR_OUT" 'fix headroom-axi=applied:' "--fix did not report installing headroom-axi"
+assert_contains "$DOCTOR_OUT" 'check headroom-axi=ok:' "the installed headroom-axi was not confirmed to measure the host"
+assert_contains "$DOCTOR_OUT" 'ok: 9.8G available' "the readiness check did not show headroom-axi's verdict"
+assert_contains "$DOCTOR_OUT" "required headroom-axi=$CASE_HOME/.local/bin/headroom-axi" \
+  "the runtime PATH did not resolve the installed headroom-axi"
+assert_contains "$DOCTOR_OUT" 'ok: worker-machine readiness confirmed on this host' "the ready verdict did not name the worker-machine role"
+assert_grep 'install github:bnvinay92/headroom-axi' "$CASE_STATE/npm.log" "--fix did not install headroom-axi from its source"
+assert_grep '# Firstmate remote tool wrapper v1' "$CASE_HOME/.local/bin/headroom-axi" "the headroom-axi wrapper is not Firstmate-owned"
+assert_grep "$NPM_PREFIX/bin/headroom-axi" "$CASE_HOME/.local/bin/headroom-axi" "the wrapper does not run npm's installed copy"
+doctor --fix --worker-machine
+expect_code 0 "$DOCTOR_RC" "a ready worker machine was not ready on a second --fix"
+[ "$(grep -c '^install ' "$CASE_STATE/npm.log")" -eq 1 ] || fail "--fix reinstalled a headroom-axi that already measures the host"
+pass "a worker machine requires headroom-axi, and --fix installs it with npm and links it on the runtime PATH"
+
+printf '#!/usr/bin/env bash\nprintf "error: headroom-axi does not support this platform\\n" >&2\nexit 2\n' \
+  > "$NPM_PREFIX/bin/headroom-axi"
+doctor --worker-machine
+expect_code 1 "$DOCTOR_RC" "a worker machine whose headroom-axi cannot measure it was reported ready"
+assert_contains "$DOCTOR_OUT" 'does not measure this host (exit 2: error: headroom-axi does not support this platform)' \
+  "an outdated headroom-axi was not named as unable to measure the host"
+doctor --worker-machine --fix
+expect_code 0 "$DOCTOR_RC" "--fix did not update an outdated headroom-axi"
+[ "$(grep -c '^install ' "$CASE_STATE/npm.log")" -eq 2 ] || fail "--fix did not reinstall the outdated headroom-axi"
+assert_contains "$DOCTOR_OUT" 'check headroom-axi=ok:' "the updated headroom-axi was not confirmed"
+pass "a headroom-axi that cannot measure the host is fixable and --fix updates it"
+
+new_case Linux with-herdr no-gui
+printf 'true\n' > "$CASE_HERDR_RUNNING"
+install_fake_npm "$CASE_DIR/npm-global"
+mkdir -p "$CASE_HOME/.local/bin"
+printf 'operator note\n' > "$CASE_HOME/.local/bin/headroom-axi"
+chmod 600 "$CASE_HOME/.local/bin/headroom-axi"
+doctor --worker-machine --fix
+expect_code 1 "$DOCTOR_RC" "--fix replaced an operator-owned headroom-axi path"
+assert_contains "$DOCTOR_OUT" 'fix headroom-axi=failed:' "the refusal to replace an operator file was not reported"
+assert_contains "$DOCTOR_OUT" 'is not Firstmate-owned' "the refusal did not say why"
+[ "$(cat "$CASE_HOME/.local/bin/headroom-axi")" = 'operator note' ] || fail "--fix overwrote an operator-owned file"
+pass "--fix never replaces an operator-owned headroom-axi path"

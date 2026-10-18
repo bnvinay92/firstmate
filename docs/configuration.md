@@ -841,6 +841,7 @@ It is local and gitignored, and an absent file means no worker is ever placed el
 Each line names one machine: `<machine-id> host=<ssh-alias> root=<remote-code-root> home=<worker-host-home> [prefer=<tag>,...]`.
 `root=` is the machine's Firstmate clone, and `home=` is a separate absolute path for the worker-host home that holds that machine's project clones and placed workers.
 `prefer=` is intake guidance only, such as `prefer=android,jvm` for work the captain prefers to run on that machine.
+A machine's memory and disk thresholds are declared beside this file as `config/spawn-headroom.<machine-id>` ([spawn headroom](#spawn-headroom-configspawn-headroom)).
 
 [`bin/fm-worker-machine-lib.sh`](../bin/fm-worker-machine-lib.sh) owns the exact format and its refusals, and [remote workers](remote-workers.md) owns the setup, scope, and safety behavior.
 
@@ -1217,6 +1218,12 @@ The verdict measures the moment of the spawn, and a worker admitted a moment ear
 When headroom-axi is not installed, jq is missing, or headroom-axi errors, times out, or prints no readable verdict, the spawn is admitted with a `warning:` line naming the problem rather than deferred, because a deferral is retried indefinitely and a broken measurement would otherwise hold every fresh spawn on the machine queued; any project capacity still applies.
 A malformed or unreadable file refuses every fresh ship or scout spawn until it is fixed, rather than guessing the intended thresholds.
 A relaunch of an existing task and a secondmate launch are never measured.
+
+A worker placed with `bin/fm-spawn.sh --machine` is measured on its worker machine, never on this one.
+That machine's declaration is this file in its worker-host home, which is the machine's root home, so the machine's spawn admission, its workers' heavy-build gate, and its build slots all read it.
+Declare it in the spawning home as `config/spawn-headroom.<machine-id>`, in the same format; every placement validates it, installs it in the worker-host home when it changed, and measures the machine with the machine's own headroom-axi before anything else is staged there.
+A short machine defers the placement with the same `deferred:` line and exit 75, and a machine with no declaration on either side is placed with a `warning:` line and its builds are not gated.
+[Remote workers](remote-workers.md#headroom-on-a-worker-machine) owns installing headroom-axi on the machine and the Linux measurement caveats.
 
 Running workers reach the same verdict through `bin/fm-headroom-gate.sh`.
 While the file exists, every generated ship and scout brief gains a short "Machine headroom" section naming the gate command for that home.

@@ -3,7 +3,8 @@
 # deterministic SSH boundary (docs/remote-workers.md): placement, account
 # install, project preparation and its deferral, brief rendering, status mirror
 # and report copy, steering, peek, crew-state, watcher observe, control,
-# unreachable-machine behavior, and cleanup.
+# unreachable-machine behavior, cleanup, and the machine's own headroom
+# admission with its provisioned declaration.
 #
 # The real fm-on.sh transport, fixed entrypoint, job worker, and
 # fm-remote-worker-control.sh run on the "machine" side. The ordinary host-local
@@ -208,6 +209,8 @@ shift 2
 cd "$FM_FAKE_REMOTE_CWD" || exit 93
 command_name=$(perl -MMIME::Base64=decode_base64 -e 'my @a=split(/\0/, decode_base64($ARGV[0])); print $a[0]' "$4")
 if [ "$command_name" = fm-remote-doctor.sh ]; then
+  perl -MMIME::Base64=decode_base64 -e 'print join(" ", split(/\0/, decode_base64($ARGV[0]))), "\n"' "$4" \
+    >> "$FM_FAKE_REMOTE_CWD/doctor-args.log"
   printf 'check herdr=ok: fixture\n'
   printf 'ok: remote readiness confirmed on this host\n'
   exit 0
@@ -283,6 +286,8 @@ assert_grep "origin" "$WHH/projects/alpha/.git/config" "the machine has no clone
 assert_grep '--scout' "$HOST_LOG" "the host-local spawn was not a scout"
 assert_grep '--backend herdr' "$HOST_LOG" "the host-local spawn did not select Herdr"
 assert_grep 'HERDR_SESSION=fm-remote' "$HOST_LOG" "the host-local spawn did not run in the fm-remote session"
+assert_grep 'fm-remote-doctor.sh --worker-machine' "$TMP_ROOT/doctor-args.log" \
+  "the placement did not check the machine's readiness as a worker machine"
 pass "a scout is placed through the machine's ordinary spawn and recorded here"
 
 REMOTE_BRIEF="$WHH/data/scout1/brief.md"
@@ -446,3 +451,110 @@ w_env "$ROOT/bin/fm-teardown.sh" ship1 > "$TMP_ROOT/ship-td.out" 2>&1 \
   || fail "cleaning up the placed ship failed: $(cat "$TMP_ROOT/ship-td.out")"
 assert_absent "$PARENT/state/ship1.meta" "ship cleanup left this home's record"
 pass "a direct-PR ship places, follows the account switch, relays a machine deferral, and cleans up"
+
+# --- the worker machine's own headroom ---------------------------------------
+
+# The machine measures itself with its own headroom-axi (first on the job
+# worker's PATH, in the machine's code root); this machine's headroom-axi and
+# config/spawn-headroom must never decide a placement.
+cat > "$REMOTE_ROOT/bin/headroom-axi" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> '$TMP_ROOT/pc-headroom.log'
+case "\$(cat '$TMP_ROOT/pc-headroom.mode' 2>/dev/null)" in
+  short)
+    printf '%s\n' '{"ok":false,"line":"short: 1.2G available, below 4G; largest: gradle daemon 6.1G","ram":{"short":true,"pressure":"warn"}}'
+    exit 1
+    ;;
+  broken)
+    printf 'error: headroom-axi does not support this platform\n' >&2
+    exit 2
+    ;;
+esac
+printf '%s\n' '{"ok":true,"line":"ok: 9.8G available","ram":{"short":false,"pressure":"normal"}}'
+SH
+cat > "$FAKEBIN/headroom-axi" <<SH
+#!/usr/bin/env bash
+printf 'measured\n' >> '$TMP_ROOT/mac-headroom.log'
+printf '%s\n' '{"ok":false,"line":"short: this machine","ram":{"short":true,"pressure":"critical"}}'
+exit 1
+SH
+chmod +x "$REMOTE_ROOT/bin/headroom-axi" "$FAKEBIN/headroom-axi"
+printf 'min-ram 1G\n' > "$PARENT/config/spawn-headroom"
+printf '# the PC\nmin-ram 4G\nmin-disk 10G\npressure critical\nmax-builds 1\n' > "$PARENT/config/spawn-headroom.pc"
+
+place_ship() { # <id> <output-file>
+  PATH="$FAKEBIN:$PATH" w_env "$ROOT/bin/fm-spawn.sh" "$1" "$PARENT/projects/alpha" --mode direct-PR --yolo off \
+    --harness claude --machine pc > "$2" 2>&1
+}
+
+write_brief ship2 ship
+printf 'short\n' > "$TMP_ROOT/pc-headroom.mode"
+rc=0
+place_ship ship2 "$TMP_ROOT/ship2-short.out" || rc=$?
+expect_code 75 "$rc" "a placement on a machine short of headroom"
+assert_grep 'deferred: ship2 on machine pc: short of headroom for another worker' "$TMP_ROOT/ship2-short.out" \
+  "the machine's headroom deferral was not reported"
+assert_grep 'headroom-axi: short: 1.2G available, below 4G; largest: gradle daemon 6.1G' "$TMP_ROOT/ship2-short.out" \
+  "the deferral did not carry the machine's verdict"
+assert_grep 'stays queued' "$TMP_ROOT/ship2-short.out" "the deferral did not say the task stays queued"
+assert_absent "$PARENT/state/ship2.meta" "a headroom-deferred placement published a record"
+assert_absent "$WHH/data/ship2/brief.md" "a headroom-deferred placement staged a brief on the machine"
+assert_no_grep 'spawn ship2' "$HOST_LOG" "a headroom-deferred placement reached the machine's spawn"
+cmp -s "$PARENT/config/spawn-headroom.pc" "$WHH/config/spawn-headroom" \
+  || fail "the machine's declaration was not provisioned from config/spawn-headroom.pc"
+assert_grep 'check --json --min-ram 4G --min-disk 10G' "$TMP_ROOT/pc-headroom.log" \
+  "the machine was not measured against its own declaration"
+assert_absent "$TMP_ROOT/mac-headroom.log" "the spawning machine's headroom decided a placement"
+pass "a machine short of its own headroom defers the placement before anything is staged there"
+
+printf 'ok\n' > "$TMP_ROOT/pc-headroom.mode"
+place_ship ship2 "$TMP_ROOT/ship2.out" || fail "placing ship2 on a machine with headroom failed: $(cat "$TMP_ROOT/ship2.out")"
+assert_grep 'window=remote:ship2' "$TMP_ROOT/ship2.out" "the admitted placement did not spawn"
+! grep -q 'warning:.*headroom' "$TMP_ROOT/ship2.out" || fail "a measured, admitted placement warned about headroom"
+assert_grep '# Machine headroom' "$WHH/data/ship2/brief.md" "the machine's brief has no headroom gate"
+gate_line=$(grep -F 'fm-headroom-gate.sh' "$WHH/data/ship2/brief.md" | head -n 1)
+assert_contains "$gate_line" "worker-homes/main" "the brief's gate does not measure the worker-host home"
+assert_contains "$gate_line" "--run --" "the brief's gate is not the build-slot wrapper"
+assert_not_contains "$gate_line" "$PARENT" "the brief's gate names this machine's home"
+assert_absent "$TMP_ROOT/mac-headroom.log" "the spawning machine's headroom decided a placement"
+w_env "$ROOT/bin/fm-teardown.sh" ship2 > "$TMP_ROOT/ship2-td.out" 2>&1 \
+  || fail "cleaning up ship2 failed: $(cat "$TMP_ROOT/ship2-td.out")"
+pass "a machine with headroom admits the placement and its brief gates heavy builds on the machine's own slots"
+
+write_brief ship3 ship
+printf 'broken\n' > "$TMP_ROOT/pc-headroom.mode"
+place_ship ship3 "$TMP_ROOT/ship3.out" || fail "placing ship3 with a failing headroom-axi failed: $(cat "$TMP_ROOT/ship3.out")"
+assert_grep 'warning: spawn headroom on machine pc was not checked for task ship3' "$TMP_ROOT/ship3.out" \
+  "an unmeasured machine was admitted without a warning"
+assert_grep 'exit 2' "$TMP_ROOT/ship3.out" "the warning did not name why the machine was not measured"
+w_env "$ROOT/bin/fm-teardown.sh" ship3 > "$TMP_ROOT/ship3-td.out" 2>&1 \
+  || fail "cleaning up ship3 failed: $(cat "$TMP_ROOT/ship3-td.out")"
+pass "a machine that cannot measure itself is admitted with a warning, as locally"
+
+write_brief ship4 ship
+printf 'min-ram lots\n' > "$PARENT/config/spawn-headroom.pc"
+: > "$TMP_ROOT/pc-headroom.log"
+rc=0
+place_ship ship4 "$TMP_ROOT/ship4-bad.out" || rc=$?
+expect_code 1 "$rc" "a placement with an unreadable machine declaration"
+assert_grep 'spawn-headroom.pc is unreadable' "$TMP_ROOT/ship4-bad.out" "the unreadable machine declaration was not named"
+assert_absent "$PARENT/state/ship4.meta" "a refused placement published a record"
+[ ! -s "$TMP_ROOT/pc-headroom.log" ] || fail "an unreadable declaration still measured the machine"
+cmp -s "$WHH/config/spawn-headroom" - <<'EOF' || fail "an unreadable declaration replaced the machine's last good one"
+# the PC
+min-ram 4G
+min-disk 10G
+pressure critical
+max-builds 1
+EOF
+pass "an unreadable machine declaration refuses the placement and keeps the machine's last good one"
+
+rm -f "$PARENT/config/spawn-headroom.pc" "$WHH/config/spawn-headroom"
+place_ship ship4 "$TMP_ROOT/ship4.out" || fail "placing ship4 with no machine declaration failed: $(cat "$TMP_ROOT/ship4.out")"
+assert_grep 'warning: machine pc declares no spawn headroom' "$TMP_ROOT/ship4.out" \
+  "a machine with no declaration was placed without a warning"
+assert_no_grep '# Machine headroom' "$WHH/data/ship4/brief.md" "a machine with no declaration gated builds"
+assert_absent "$TMP_ROOT/mac-headroom.log" "the spawning machine's headroom decided a placement"
+w_env "$ROOT/bin/fm-teardown.sh" ship4 > "$TMP_ROOT/ship4-td.out" 2>&1 \
+  || fail "cleaning up ship4 failed: $(cat "$TMP_ROOT/ship4-td.out")"
+pass "a machine with no declaration on either side is placed with a warning and no build gate"

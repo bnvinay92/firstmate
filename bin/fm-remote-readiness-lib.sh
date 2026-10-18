@@ -5,7 +5,9 @@
 #   fm_remote_readiness_ensure <bin-dir> <secondmate-id>
 #   fm_remote_readiness_ensure_route <bin-dir> <fm-on route args...>
 # The second form takes any bin/fm-on.sh route, such as `--machine <id>` for a
-# worker machine (docs/remote-workers.md).
+# worker machine (docs/remote-workers.md); a --machine route runs every doctor
+# pass with --worker-machine, so the machine is also checked for what placed
+# workers need there.
 #
 # It runs bin/fm-remote-doctor.sh on that route's configured host, and when the
 # read-only run reports any gap it runs the doctor again with --fix and then a
@@ -30,20 +32,22 @@ fm_remote_readiness_ensure() { # <bin-dir> <secondmate-id>
 
 fm_remote_readiness_ensure_route() { # <bin-dir> <fm-on route args...>
   local bin_dir=$1 out rc
+  local -a role=()
   shift
+  [ "${1:-}" != --machine ] || role=(--worker-machine)
 
-  out=$("$bin_dir/fm-on.sh" "$@" fm-remote-doctor.sh < /dev/null 2>&1)
+  out=$("$bin_dir/fm-on.sh" "$@" fm-remote-doctor.sh ${role[@]+"${role[@]}"} < /dev/null 2>&1)
   rc=$?
   FM_REMOTE_READINESS_OUT=$out
   [ "$rc" -ne 0 ] || return 0
   [ "$rc" -ne 255 ] || return 255
 
-  out=$("$bin_dir/fm-on.sh" "$@" fm-remote-doctor.sh --fix < /dev/null 2>&1)
+  out=$("$bin_dir/fm-on.sh" "$@" fm-remote-doctor.sh ${role[@]+"${role[@]}"} --fix < /dev/null 2>&1)
   rc=$?
   FM_REMOTE_READINESS_OUT=$out
   [ "$rc" -ne 255 ] || return 255
 
-  out=$("$bin_dir/fm-on.sh" "$@" fm-remote-doctor.sh < /dev/null 2>&1)
+  out=$("$bin_dir/fm-on.sh" "$@" fm-remote-doctor.sh ${role[@]+"${role[@]}"} < /dev/null 2>&1)
   rc=$?
   FM_REMOTE_READINESS_OUT=$out
   [ "$rc" -ne 255 ] || return 255
