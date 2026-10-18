@@ -4495,6 +4495,48 @@ test_leaked_worktree_process_is_reaped() {
   pass "a leaked descendant process rooted under the task's worktree is reaped by teardown, not left surviving"
 }
 
+# Cleanup stops the finished worker's idle Gradle daemon - one whose last build
+# ran in the task's worktree although its own working directory is elsewhere -
+# and leaves every other daemon alone (bin/fm-daemon-reap.sh owns the rule).
+test_worker_idle_gradle_daemon_is_reaped_at_cleanup() {
+  local case_dir rc mine other guh stamp idle log pid dir
+  case_dir=$(make_case idle-daemon-reap)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+  guh="$case_dir/gradle-user-home"
+  idle=$(( $(date +%s) - 600 ))
+  stamp=$( { date -r "$idle" +%Y-%m-%dT%H:%M:%S.000%z 2>/dev/null || date -d "@$idle" +%Y-%m-%dT%H:%M:%S.000%z; } )
+  ( cd / && exec -a "java -cp gradle-launcher.jar org.gradle.launcher.daemon.bootstrap.GradleDaemon 9.8.1" sleep 300 ) &
+  mine=$!
+  disown
+  ( cd / && exec -a "java -cp gradle-launcher.jar org.gradle.launcher.daemon.bootstrap.GradleDaemon 9.8.1" sleep 300 ) &
+  other=$!
+  disown
+  for pid in "$mine" "$other"; do
+    dir="$case_dir/elsewhere"
+    [ "$pid" != "$mine" ] || dir="$case_dir/wt/app"
+    log="$guh/daemon/9.8.1/daemon-$pid.out.log"
+    mkdir -p "${log%/*}"
+    printf '%s [INFO] [x] Received command: Build{id=b, currentDir=%s}.\n%s [INFO] [x] Marking the daemon as idle, address: [a]\n' \
+      "$stamp" "$dir" "$stamp" > "$log"
+  done
+
+  rc=0
+  GRADLE_USER_HOME="$guh" FM_DAEMON_REAP_PIDS="$mine $other" \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  kill -0 "$other" 2>/dev/null || fail "idle-daemon-reap: cleanup stopped a daemon whose last build ran elsewhere"
+  kill -KILL "$other" 2>/dev/null || true
+  expect_code 0 "$rc" "idle-daemon-reap: teardown should still succeed"
+  if kill -0 "$mine" 2>/dev/null; then
+    kill -KILL "$mine" 2>/dev/null || true
+    fail "idle-daemon-reap: the worker's idle Gradle daemon survived cleanup"
+  fi
+  assert_grep "reaped: idle Gradle 9.8.1 daemon $mine" "$case_dir/stderr" \
+    "idle-daemon-reap: teardown did not report the daemon it stopped"
+  pass "cleanup stops the worker's idle Gradle daemon and no other"
+}
+
 test_leaked_tasktmp_process_is_reaped() {
   local case_dir rc pid
   case_dir=$(make_case leaked-tasktmp-reap)
@@ -5139,6 +5181,7 @@ test_not_found_status_after_abort_confirms_completion
 test_another_branchs_parked_run_is_never_touched
 test_own_autonomous_run_is_left_alone
 test_leaked_worktree_process_is_reaped
+test_worker_idle_gradle_daemon_is_reaped_at_cleanup
 test_leaked_tasktmp_process_is_reaped
 test_lsof_absent_reaps_tmux_process_group
 test_lsof_error_refuses_before_removal

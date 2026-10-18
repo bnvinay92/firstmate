@@ -1181,7 +1181,7 @@ Firstmate cannot see which part of a worker's life uses the resource, so the num
 ## Spawn headroom (config/spawn-headroom)
 
 The optional local, gitignored `config/spawn-headroom` is how a machine bounds the memory and disk load of its workers, both when a worker is launched and when a running worker starts heavy local work.
-While it is present, every fresh ship or scout spawn first asks [headroom-axi](https://github.com/bnvinay92/headroom-axi) whether the machine has room for one more worker, and is deferred while it does not; every running worker checks the same thresholds before it starts a heavy build, test suite, emulator, or simulator, and waits while the machine is short.
+While it is present, every fresh ship or scout spawn first asks [headroom-axi](https://github.com/bnvinay92/headroom-axi) whether the machine has room for one more worker, and is deferred while it does not; every running worker runs each heavy build, test suite, emulator, or simulator through a wrapper that checks the same thresholds, and waits while the machine is short or, when a slot count is declared, while every heavy-build slot is in use.
 Without it nothing is measured, dispatch is unchanged, and briefs carry no headroom instruction.
 The file lives in the machine's root Firstmate home, like `config/project-capacity`, so every local secondmate home is measured against the same thresholds, and it holds one `<key> <value>` setting per line:
 
@@ -1191,11 +1191,13 @@ min-ram 4G
 min-disk 30G
 pressure warn
 max-wait 30
+max-builds 2
 ```
 
 `min-ram` and `min-disk` are sizes such as `4G` or `512M` passed to `headroom-axi check`, which compares them with available memory and free disk on the data volume; at least one is required.
 `pressure` is optional and is `warn` or `critical`: the spawn is also deferred while the kernel's memory pressure is at or above that level, whatever available memory says, and without it pressure alone never defers.
-`max-wait` is optional, a whole number of minutes that defaults to 30, and bounds only a running worker's wait.
+`max-wait` is optional, a whole number of minutes that defaults to 30, and bounds only a running worker's wait for memory and disk.
+`max-builds` is optional, a whole number of at most three digits: at most that many heavy builds run at once on the machine, counted across every local home, and without it the count is unbounded; spawn admission never reads it.
 Blank lines and lines starting with `#` are ignored.
 A deferred spawn launches nothing, creates no record, leaves the backlog item queued, prints one `deferred:` line carrying headroom-axi's verdict, which names the largest memory or disk consumers, and exits 75, exactly like a capacity deferral.
 Firstmate retries it at its ordinary queue re-evaluation after a cleanup and at each heartbeat, so a short machine is measured once per dispatch attempt and never polled.
@@ -1206,12 +1208,16 @@ A relaunch of an existing task and a secondmate launch are never measured.
 
 Running workers reach the same verdict through `bin/fm-headroom-gate.sh`.
 While the file exists, every generated ship and scout brief gains a short "Machine headroom" section naming the gate command for that home.
-Before a heavy build, test suite, emulator, or simulator, the worker runs the gate: on go it starts the work, and on wait it does not start it, declares one `paused:` line carrying headroom-axi's verdict and the latest time it will wait, and stays in the gate's own bounded `--wait` command, rerunning it until the gate says go, then records `resolved:`.
+The worker runs every heavy command through the gate's `--run` wrapper, one wrapper per command and never one check for a script or batch that starts several, because a single check cannot see the memory each later build will grow into.
+On go the wrapper runs the command, holding one heavy-build slot for the command's whole run when `max-builds` is set, and exits with the command's own status; on wait it does not start the command, and the worker declares one `paused:` line carrying the gate's reason and stays in the gate's own bounded `--wait` form, rerunning it until the command starts, then records `resolved:`.
 Firstmate gains no poller: the wait is the worker's own declared wait, re-measured once a minute.
 The gate only decides whether to start work, so it never stops or interrupts a build already running.
-A worker that has waited `max-wait` minutes starts its work anyway, so waiting workers cannot starve each other, for example while their own idle build daemons hold the memory they wait for; the paused line names the largest consumers, so Firstmate can free memory sooner.
+A worker that has waited `max-wait` minutes for memory or disk starts its work anyway, so waiting workers cannot starve each other; the paused line names the largest consumers, so Firstmate can free memory sooner.
+`max-wait` never lets a build past a full set of slots, because starting anyway would recreate the pile-up the slots exist to prevent; a slot wait still ends, since every slot belongs to a running build that releases it when it exits and a slot whose holder process is gone is reclaimed.
+When the machine is short of memory, the gate first stops this user's idle Gradle and Kotlin build daemons, longest idle first, re-measuring after each, and waits only if that does not free enough; worker cleanup likewise stops idle Gradle daemons whose last build ran in that worker's copy.
+[`bin/fm-daemon-reap.sh`](../bin/fm-daemon-reap.sh) owns that idle-only rule, which never touches a daemon that may be building and never uses `gradle --stop`.
 A missing or failing headroom-axi, or an unreadable file, lets the worker start, with the gate's line naming the problem, matching spawn admission; only spawn refuses an unreadable file, because a running worker cannot fix it.
-[`bin/fm-spawn-headroom-lib.sh`](../bin/fm-spawn-headroom-lib.sh) owns the file format and the verdict, and [`bin/fm-headroom-gate.sh`](../bin/fm-headroom-gate.sh) owns the running worker's check, its exit codes, and its bounded wait.
+[`bin/fm-spawn-headroom-lib.sh`](../bin/fm-spawn-headroom-lib.sh) owns the file format and the verdict, and [`bin/fm-headroom-gate.sh`](../bin/fm-headroom-gate.sh) owns the running worker's check, the wrapper and its slots, its exit codes, and its bounded wait.
 
 ## Crew dispatch profiles (config/crew-dispatch.json)
 

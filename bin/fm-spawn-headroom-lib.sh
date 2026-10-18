@@ -38,11 +38,17 @@
 #                           before it starts its heavy work anyway (default
 #                           FM_SPAWN_HEADROOM_MAX_WAIT_DEFAULT); spawn admission
 #                           never reads it
+#   max-builds <n>          admit at most <n> heavy builds at once machine-wide,
+#                           each holding one build slot for its whole run
+#                           (bin/fm-headroom-gate.sh owns the slots); spawn
+#                           admission never reads it
 # <size> is a positive number with an optional fraction and a K, M, G, or T unit
 # (4G, 512M, 1.5G), the form `headroom-axi check` takes. At least one of min-ram
 # and min-disk is required, because that is what headroom-axi checks; pressure
 # is optional, and without it pressure alone never defers. max-wait is a
-# positive integer of at most four digits. An unknown key, a key
+# positive integer of at most four digits, and max-builds a positive integer of
+# at most three digits; without max-builds the number of concurrent heavy
+# builds is unbounded. An unknown key, a key
 # given twice, a malformed value, a declaration with neither minimum, or an
 # unreadable file makes the whole declaration unreadable, and bin/fm-spawn.sh
 # then refuses every fresh ship or scout spawn from this machine's homes until
@@ -85,7 +91,8 @@ FM_SPAWN_HEADROOM_MAX_WAIT_DEFAULT=30
 # to 1 when the machine opts in (empty otherwise), and FM_SPAWN_HEADROOM_MIN_RAM,
 # FM_SPAWN_HEADROOM_MIN_DISK, and FM_SPAWN_HEADROOM_PRESSURE to the declared
 # values, each empty when not declared, and FM_SPAWN_HEADROOM_MAX_WAIT to the
-# declared max-wait minutes or the default. Returns 1 with
+# declared max-wait minutes or the default, and FM_SPAWN_HEADROOM_MAX_BUILDS to
+# the declared slot count, empty when not declared. Returns 1 with
 # FM_SPAWN_HEADROOM_ERROR when the declaration is unreadable.
 fm_spawn_headroom_lookup() {  # <config-dir>
   local line lineno=0 key value rest previous
@@ -95,6 +102,7 @@ fm_spawn_headroom_lookup() {  # <config-dir>
   FM_SPAWN_HEADROOM_MIN_DISK=
   FM_SPAWN_HEADROOM_PRESSURE=
   FM_SPAWN_HEADROOM_MAX_WAIT=
+  FM_SPAWN_HEADROOM_MAX_BUILDS=
   FM_SPAWN_HEADROOM_ERROR=
   if [ ! -e "$FM_SPAWN_HEADROOM_FILE" ] && [ ! -L "$FM_SPAWN_HEADROOM_FILE" ]; then
     return 0
@@ -146,6 +154,18 @@ fm_spawn_headroom_lookup() {  # <config-dir>
           return 1
         fi
         ;;
+      max-builds)
+        case "$value" in
+          '' | *[!0-9]* | 0*)
+            FM_SPAWN_HEADROOM_ERROR="$FM_SPAWN_HEADROOM_FILE line $lineno gives max-builds a number of builds that is not a positive integer"
+            return 1
+            ;;
+        esac
+        if [ "${#value}" -gt 3 ]; then
+          FM_SPAWN_HEADROOM_ERROR="$FM_SPAWN_HEADROOM_FILE line $lineno gives max-builds more than three digits"
+          return 1
+        fi
+        ;;
       *)
         FM_SPAWN_HEADROOM_ERROR="$FM_SPAWN_HEADROOM_FILE line $lineno names unknown setting $key"
         return 1
@@ -156,6 +176,7 @@ fm_spawn_headroom_lookup() {  # <config-dir>
       min-disk) previous=$FM_SPAWN_HEADROOM_MIN_DISK ;;
       pressure) previous=$FM_SPAWN_HEADROOM_PRESSURE ;;
       max-wait) previous=$FM_SPAWN_HEADROOM_MAX_WAIT ;;
+      max-builds) previous=$FM_SPAWN_HEADROOM_MAX_BUILDS ;;
     esac
     if [ -n "$previous" ]; then
       FM_SPAWN_HEADROOM_ERROR="$FM_SPAWN_HEADROOM_FILE line $lineno gives $key a second time"
@@ -166,12 +187,14 @@ fm_spawn_headroom_lookup() {  # <config-dir>
       min-disk) FM_SPAWN_HEADROOM_MIN_DISK=$value ;;
       pressure) FM_SPAWN_HEADROOM_PRESSURE=$value ;;
       max-wait) FM_SPAWN_HEADROOM_MAX_WAIT=$value ;;
+      max-builds) FM_SPAWN_HEADROOM_MAX_BUILDS=$value ;;
     esac
   done < "$FM_SPAWN_HEADROOM_FILE"
   if [ -z "$FM_SPAWN_HEADROOM_MIN_RAM" ] && [ -z "$FM_SPAWN_HEADROOM_MIN_DISK" ]; then
     FM_SPAWN_HEADROOM_ERROR="$FM_SPAWN_HEADROOM_FILE declares neither min-ram nor min-disk"
     FM_SPAWN_HEADROOM_PRESSURE=
     FM_SPAWN_HEADROOM_MAX_WAIT=
+    FM_SPAWN_HEADROOM_MAX_BUILDS=
     return 1
   fi
   [ -n "$FM_SPAWN_HEADROOM_MAX_WAIT" ] || FM_SPAWN_HEADROOM_MAX_WAIT=$FM_SPAWN_HEADROOM_MAX_WAIT_DEFAULT
@@ -208,7 +231,9 @@ fm_spawn_headroom_pressure_rank() {  # <level>
 # declared thresholds (fm_spawn_headroom_lookup must have succeeded with the
 # machine opted in).
 # Returns 0 to admit, or FM_SPAWN_HEADROOM_DEFER_EXIT to defer with
-# FM_SPAWN_HEADROOM_REASON naming headroom-axi's verdict. On an admit,
+# FM_SPAWN_HEADROOM_REASON naming headroom-axi's verdict and
+# FM_SPAWN_HEADROOM_MEMORY_SHORT set to 1 when memory, rather than only disk, is
+# what is short (freeing memory could then admit). On an admit,
 # FM_SPAWN_HEADROOM_WARNING is empty when the measurement succeeded and
 # otherwise names why the machine could not be measured.
 fm_spawn_headroom_admit() {
@@ -216,6 +241,7 @@ fm_spawn_headroom_admit() {
   local -a args=(check --json)
   FM_SPAWN_HEADROOM_REASON=
   FM_SPAWN_HEADROOM_WARNING=
+  FM_SPAWN_HEADROOM_MEMORY_SHORT=
   [ -z "$FM_SPAWN_HEADROOM_MIN_RAM" ] || args+=(--min-ram "$FM_SPAWN_HEADROOM_MIN_RAM")
   [ -z "$FM_SPAWN_HEADROOM_MIN_DISK" ] || args+=(--min-disk "$FM_SPAWN_HEADROOM_MIN_DISK")
   if ! command -v headroom-axi >/dev/null 2>&1; then
@@ -244,6 +270,13 @@ fm_spawn_headroom_admit() {
   if [ "$rc" -eq 1 ]; then
     [ -n "$line" ] || line=$(printf '%s\n' "$out" | head -n 1)
     FM_SPAWN_HEADROOM_REASON="headroom-axi: $line"
+    pressure=$(printf '%s\n' "$out" | jq -r 'if type == "object" and (.ram.pressure | type) == "string" then .ram.pressure else empty end' 2>/dev/null)
+    measured=$(fm_spawn_headroom_pressure_rank "$pressure")
+    declared=$(fm_spawn_headroom_pressure_rank "$FM_SPAWN_HEADROOM_PRESSURE")
+    if [ "$(printf '%s\n' "$out" | jq -r 'if type == "object" and .ram.short == true then "yes" else empty end' 2>/dev/null)" = yes ] \
+      || { [ -n "$measured" ] && [ -n "$declared" ] && [ "$measured" -ge "$declared" ]; }; then
+      FM_SPAWN_HEADROOM_MEMORY_SHORT=1
+    fi
     return "$FM_SPAWN_HEADROOM_DEFER_EXIT"
   fi
   ok=$(printf '%s\n' "$out" | jq -r 'if type == "object" and .ok == true then "yes" else empty end' 2>/dev/null)
@@ -261,6 +294,7 @@ fm_spawn_headroom_admit() {
   declared=$(fm_spawn_headroom_pressure_rank "$FM_SPAWN_HEADROOM_PRESSURE")
   if [ "$measured" -ge "$declared" ]; then
     FM_SPAWN_HEADROOM_REASON="memory pressure is $pressure, at or above the declared $FM_SPAWN_HEADROOM_PRESSURE; headroom-axi: $line"
+    FM_SPAWN_HEADROOM_MEMORY_SHORT=1
     return "$FM_SPAWN_HEADROOM_DEFER_EXIT"
   fi
   return 0
