@@ -92,10 +92,13 @@
 # contribution author) and issue transitions to ready-for-pr persist as pending
 # before any wake. poll appends ordinary durable check wakes through fm-wake-lib
 # and emits only newly durable signals for the authenticated check to surface.
+# A review signal also records inline: how many inline review comments that
+# review carries.
 # Under the routine PR outcomes opt-in (docs/configuration.md "Routine PR
-# outcomes"), poll removes a review with no body, in any state, from pending as soon
-# as it is recorded (bin/fm-routine-pr-lib.sh owns the test) and emits no wake
-# for it; the observation still carries the review, and the token stays in seen
+# outcomes"), poll removes a routine review - one with no body, in any state,
+# or an automated one that leaves no open finding - from pending as soon as it
+# is recorded (bin/fm-routine-pr-lib.sh owns the test) and emits no wake for
+# it; the observation still carries the review, and the token stays in seen
 # and notified. ack removes
 # only the named pending token. A crash after enqueue can duplicate a wake but
 # cannot consume the pending signal. Source bodies are data, never commands.
@@ -307,6 +310,7 @@ observe() { # canonical GitHub URL -> normalized JSON
       --slurpfile statuses "$TMP/statuses.json" --slurpfile repo "$TMP/repo.json" '
       $core[0] as $c
       | ($reviews[0] | add // []) as $reviews
+      | ($inline[0] | add // []) as $inline_all
       | {head:$c.head.sha,state:(if $c.merged_at != null then "merged" else $c.state end),
           draft:$c.draft,mergeable:(if $c.mergeable == true then "mergeable" elif $c.mergeable == false then "conflicting" else "unknown" end),
           can_merge:($repo[0].permissions.push // false),
@@ -316,11 +320,14 @@ observe() { # canonical GitHub URL -> normalized JSON
             + [ $statuses[0][] | .[] | {name:.context,id,started_at:.created_at,
               status:(if .state == "pending" then "in_progress" else "completed" end),
               conclusion:(if .state == "pending" then null else .state end)} ]),
-          events:((($comments[0] | add // [] | map(. + {_signal:"comment"})) + ($reviews | map(. + {_signal:"review"})) + ($inline[0] | add // [] | map(. + {_signal:"review-comment"})))
+          events:((($comments[0] | add // [] | map(. + {_signal:"comment"})) + ($reviews | map(. + {_signal:"review"})) + ($inline_all | map(. + {_signal:"review-comment"})))
             | map(select(.user.login != $c.user.login and (.author_association | IN("OWNER","MEMBER","COLLABORATOR")))
+              | . as $e
               | {token:((._signal + ":") + (.id|tostring) + ":" + (.updated_at // .submitted_at // "") + ":" + (.state // "")),
                  type:._signal,source:.html_url,head:.commit_id,
-                 author:.user.login,body:(.body // "" | .[:500])}))}' > "$TMP/observation.json" \
+                 author:.user.login,body:(.body // "" | .[:500])}
+                + (if $e._signal == "review" then
+                     {inline:([$inline_all[] | select(.pull_request_review_id == $e.id)] | length)} else {} end)))}' > "$TMP/observation.json" \
       || unobserved 'observation could not be assembled' || return 1
   else
     label=${FM_CONTRIBUTIONS_READY_LABEL:-ready-for-pr}
@@ -349,16 +356,22 @@ observe() { # canonical GitHub URL -> normalized JSON
 }
 
 publish_pending() { # task canonical-url record-file
-  local task=$1 url=$2 record=$3 token key count emitted status routine=0 type body
+  local task=$1 url=$2 record=$3 token key count emitted status routine=0 signal
   count=$(jq '.pending | length' "$record")
   [ "$count" -gt 0 ] || return 0
   ! fm_routine_pr_outcomes_enabled "$CONFIG" || routine=1
   while IFS= read -r token; do
     [ -n "$token" ] || continue
     if [ "$routine" -eq 1 ]; then
-      type=$(jq -r --arg token "$token" '.pending[] | select(.token == $token) | .type // ""' "$record" | head -n 1)
-      body=$(jq -r --arg token "$token" '.pending[] | select(.token == $token) | .body // ""' "$record")
-      if fm_routine_pr_contribution_event "$type" "$body"; then
+      # Join the signal to its observed review: the stored signal body is cut
+      # short, and the review alone carries its state and author type.
+      signal=$(jq -c --arg token "$token" '
+        ([.pending[] | select(.token == $token)] | first) as $e
+        | ([.observation.reviews[]? | select($e.type == "review"
+            and ((.id | tostring) == ($e.token | split(":")[1])))] | first) as $r
+        | {type:($e.type // ""),body:($r.body // $e.body // ""),state:($r.state // ""),
+           login:($r.user.login // $e.author // ""),user_type:($r.user.type // ""),inline:$e.inline}' "$record")
+      if fm_routine_pr_contribution_event "$CONFIG" "$signal"; then
         jq --arg token "$token" '.pending |= map(select(.token != $token)) | .notified = ((.notified // []) + [$token] | unique)' \
           "$record" > "$TMP/notified.json"
         mv "$TMP/notified.json" "$record"

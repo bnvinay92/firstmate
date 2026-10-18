@@ -109,6 +109,19 @@ test_branch_prompt_routes_completed_scouts_through_guarded_cleanup() {
   pass "emitted branch prompt routes completed scouts through existing policies and leased cleanup, preserving unfinished work"
 }
 
+test_branch_prompt_keeps_an_already_presented_outcome_routine() {
+  local prompt
+  prompt=$(bash "$ROOT/bin/fm-branch-prompt.sh") || fail "branch prompt generator failed"
+  # The emitted system prompt is the contract; no live agent is involved.
+  assert_contains "$prompt" \
+    "An outcome whose whole substance a [main] mirror message already put to the captain - the same question, decision, blocker, or result for the same unchanged situation - is verdict routine, not silent: the captain already has it, and the answer reaches MAIN directly." \
+    "branch prompt would re-escalate a captain question MAIN already asked"
+  assert_contains "$prompt" \
+    "Anything the mirror message did not carry keeps the outcome captain, such as a changed option, a new failure, a later step, or a PR URL MAIN did not give." \
+    "branch prompt lets the already-presented rule swallow new captain news"
+  pass "emitted branch prompt keeps an outcome MAIN already presented routine and anything new captain"
+}
+
 # --- append-only outcome store ------------------------------------------------
 
 test_outcome_store_is_append_only_with_cursor_reads() {
@@ -1579,6 +1592,7 @@ WRAPPER
 
 test_branch_prompt_is_byte_stable_and_above_cache_floor
 test_branch_prompt_routes_completed_scouts_through_guarded_cleanup
+test_branch_prompt_keeps_an_already_presented_outcome_routine
 test_outcome_store_is_append_only_with_cursor_reads
 test_outcome_append_keeps_a_bounded_display_tail
 test_outcome_tail_keeps_whole_newest_rows_within_its_byte_budget

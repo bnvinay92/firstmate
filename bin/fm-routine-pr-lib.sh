@@ -25,7 +25,8 @@
 #                                in a fresh process at every close so a host
 #                                started before an update still sees the gate
 #   bin/fm-inactive-reconcile.sh an inactive done ship with a parked PR
-#   bin/fm-contributions.sh      a review with no body
+#   bin/fm-contributions.sh      a review with no body, or an automated
+#                                review that leaves no open finding
 #
 # Sourced only; no side effects on source beyond bin/fm-pr-lib.sh.
 
@@ -88,12 +89,64 @@ fm_routine_pr_task_working() {  # <state> <task>
   return 1
 }
 
-# 0 when a contribution signal is a review with no body, in any review state:
-# the type is review and the body holds nothing but whitespace, so its only
-# news is the review state the PR itself shows. Comments and inline review
-# comments always carry text and are never routine.
-fm_routine_pr_contribution_event() {  # <type> <body>
-  [ "$1" = review ] || return 1
-  case "$2" in *[![:space:]]*) return 1 ;; esac
-  return 0
+# 0 when a contribution signal is routine news. <signal-json> is one pending
+# contribution signal joined to its observed review:
+#   {type, body, state, login, user_type, inline}
+# where body is the review's full body, state its review state, login and
+# user_type its author, and inline the number of inline review comments that
+# review carries (absent on a signal recorded before that count existed).
+# Two kinds of review are routine; comments and inline review comments always
+# carry text and never are:
+#   - A review with no body, in any review state: the body holds nothing but
+#     whitespace, so its only news is the review state the PR itself shows.
+#   - An automated review that leaves no open finding: a COMMENTED or APPROVED
+#     review with a recorded inline count of zero, whose author is automated
+#     (GitHub user type Bot, a login ending in [bot], or a login listed in
+#     <config-dir>/review-bots), and whose body reports zero findings or only
+#     resolved ones. The body test is deliberately conservative, because a
+#     signal it misjudges as routine never wakes: no list item may name a
+#     severity (a red, orange, or yellow marker, or an upper-case CRITICAL,
+#     HIGH, MEDIUM, LOW, NIT, BLOCKER, MAJOR, MINOR, or P0-P3) without also
+#     saying it is resolved (a check mark, or fixed, resolved, or addressed in
+#     a resolved form such as "(fixed in ...", "is fixed", or "now resolved"),
+#     either on the item itself or on its section lead, the nearest earlier
+#     line that is neither blank nor a list item ("Resolved since last review").
+#     When a line opens with a "Findings:" label holding counts, their sum must
+#     not exceed the resolved list items; without such a line the body must say
+#     "no findings", "0 findings", "no new findings", "no new issues", or an
+#     equivalent with open, remaining, further, or outstanding. Any other review,
+#     a human's included, stays an ordinary signal.
+# <config-dir>/review-bots is optional: one GitHub login per line, compared
+# case-insensitively, with blank lines and #-comments ignored. It names
+# machine accounts the forge reports as ordinary users. A symlink is ignored.
+fm_routine_pr_contribution_event() {  # <config-dir> <signal-json>
+  local bots=
+  if [ -f "$1/review-bots" ] && [ ! -L "$1/review-bots" ]; then
+    bots=$(sed -e 's/#.*//' -e 's/[[:space:]]//g' "$1/review-bots" | tr '[:upper:]' '[:lower:]' | grep -v '^$') || bots=
+  fi
+  printf '%s' "$2" | jq -e --arg bots "$bots" '
+    def item: test("^\\s*([-*+\u2022]|[0-9]+[.)])\\s");
+    def severity: test("\ud83d\udd34|\ud83d\udfe0|\ud83d\udfe1|\\b(CRITICAL|HIGH|MEDIUM|LOW|NIT|BLOCKER|MAJOR|MINOR|P[0-3])\\b");
+    def resolved: test("\u2705|\\((fixed|resolved|addressed)\\b|\\b(is|are|now|was|were|been)\\s+(fixed|resolved|addressed)\\b|\\b(fixed|resolved|addressed)\\s+(in|by|since|on)\\b"; "i");
+    def zero: test("\\b(no|zero|0)\\s+((new|open|remaining|further|outstanding)\\s+)?findings?\\b|\\bno\\s+(new|open|remaining|further|outstanding)\\s+issues\\b"; "i");
+    (.body // "") as $body
+    | if .type != "review" then false
+      elif ($body | test("\\S") | not) then true
+      else
+        (.login // "" | ascii_downcase) as $login
+        # Each list item carries its section lead: the nearest earlier line
+        # that is neither blank nor a list item.
+        | (reduce ($body | split("\n")[]) as $line ({lead:"",items:[]};
+            if ($line | item) then .items += [{text:$line,lead:.lead}]
+            elif ($line | test("\\S")) then .lead = $line else . end) | .items) as $items
+        | ([$items[] | select((.text | resolved) or (.lead | resolved))] | length) as $fixed
+        | ([$body | split("\n")[] | select(test("^[\\s*_#>]*findings[\\s*_]*:"; "i"))] | first) as $count_line
+        | ([($count_line // "") | scan("[0-9]+") | tonumber]) as $counts
+        | (.state | IN("COMMENTED","APPROVED"))
+          and (.inline == 0)
+          and (.user_type == "Bot" or ($login | endswith("[bot]"))
+               or ($login != "" and ([$bots | split("\n")[] | select(. != "")] | index($login)) != null))
+          and ([$items[] | select((.text | severity) and ((.text | resolved) or (.lead | resolved) | not))] | length) == 0
+          and (if ($counts | length) > 0 then ($counts | add) <= $fixed else ($body | zero) end)
+      end' >/dev/null 2>&1
 }

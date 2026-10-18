@@ -359,13 +359,15 @@ While it is present, an event whose only news is a pull request's state opens no
   The attended host takes such a row only while no other check row waits for main, because main is woken for that row anyway and handles the merge in the same turn.
 - An inactive done ship whose PR is parked is recorded as presented without a wake, because its armed merge poll still wakes the home when the PR merges or closes.
 - A contribution signal that is a review with no body, in any review state, is settled without a wake and leaves the pending list; the observation keeps the review.
+- A contribution signal that is an automated review leaving no open finding is settled the same way: a commented or approving review with no inline comment, by a GitHub App or a login listed in the optional local `config/review-bots` (one login per line, `#` comments allowed), whose body reports zero findings or only resolved ones.
+  `bin/fm-routine-pr-lib.sh` owns the body test, which treats anything it cannot prove resolved as open, so a human review, an open finding, an inline comment, or a change request still wakes.
 
-Everything else keeps its current path to main: a ship with `yolo=on`, whose merge MAIN performs itself; a ready line beside any other status line; a PR the merge poll does not watch; a cleanup that refused or did not run for a task that is not still working; any other check, decision, blocker, failure, or credential need; and every other contribution signal, including any comment or review that carries text.
+Everything else keeps its current path to main: a ship with `yolo=on`, whose merge MAIN performs itself; a ready line beside any other status line; a PR the merge poll does not watch; a cleanup that refused or did not run for a task that is not still working; any other check, decision, blocker, failure, or credential need; and every other contribution signal, including any comment, and any review that carries text other than an automated one leaving no open finding.
 A routine outcome is listed in main's next drain for awareness, and dispatching queued work that such a merge unblocked waits for main's next turn, because only main spawns work while the captain is present.
-The first two cases need the attended supervision host and leave Pi's in-process branch unchanged; the last two apply on any home.
+The first two cases need the attended supervision host and leave Pi's in-process branch unchanged; the last three apply on any home.
 The host reads the file at every close, so a host started before the file was added or before an update applies it at its next close.
 `bin/fm-routine-pr-lib.sh` owns the gate and the parked-PR test, and each consumer's header owns its use.
-The file is a home-local presentation preference and is not inherited by secondmate homes.
+The file and `config/review-bots` are home-local presentation preferences and are not inherited by secondmate homes.
 
 ## Backlog backend (.tasks.toml / config/backlog-backend)
 

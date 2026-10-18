@@ -229,6 +229,66 @@ test_routine_pr_outcomes_settle_bodiless_reviews() {
   pass 'routine PR outcomes settle only bodiless reviews, in any state, and only when opted in'
 }
 
+automated_review_body() { # zero|resolved|fixed_lead|open|counted_open
+  case "$1" in
+    zero) printf '%s' $'## Automated Review\n\n**Verdict:** Looks good - 0 findings.\n\n**Findings:** 0 inline \xc2\xb7 0 below' ;;
+    resolved) printf '%s' $'**Verdict:** Looks good - the follow-up resolves the earlier note; no new findings.\n\n**Findings:** 0 inline \xc2\xb7 1 below\n\n### Not anchored to a line\n- \xf0\x9f\x9f\xa1 MEDIUM (fixed in e2a6a12) `Machine.kt` - the reset is now in place.' ;;
+    fixed_lead) printf '%s' $'**Verdict:** Looks good - both findings are fixed; no new issues.\n\n**Verified fixed on `90aee34`:**\n- \xf0\x9f\x9f\xa0 **HIGH** `Map.kt` - no longer swallows the error.\n- **LOW** `View.kt` - listeners are detached on release.' ;;
+    open) printf '%s' $'**Verdict:** Looks good - no correctness concerns (0 issues from the security pass).\n\n**Findings:** 0 inline \xc2\xb7 1 below\n\n### Not anchored to a line\n- \xf0\x9f\x9f\xa1 MEDIUM `Machine.kt` - the tab pick does not reset the info page.' ;;
+    counted_open) printf '%s' $'**Verdict:** Looks good - no new findings.\n\n**Findings:** 0 inline \xc2\xb7 1 advisory in this summary\n\n- Consider renaming `flag` for clarity.' ;;
+  esac
+}
+
+# Under the routine PR outcomes opt-in an automated review that leaves no open
+# finding - zero findings, or only resolved ones, and no inline comment - is
+# settled without a wake. A human review, an open finding, an inline comment, a
+# change request, or a home that has not opted in still wakes.
+test_routine_pr_outcomes_settle_automated_reviews_without_open_findings() {
+  local case login type state body inline opted expect home
+  while IFS='|' read -r case login type state body inline opted expect; do
+    home=$(new_home "routine-bot-$case")
+    forge_home "$home"
+    [ "$opted" = no ] || : > "$home/config/routine-pr-outcomes"
+    printf '# automated reviewers\nReview-Bot\n' > "$home/config/review-bots"
+    with_home "$home" "$ROOT/bin/fm-pr-check.sh" delivery https://github.com/o/r/pull/8 >/dev/null \
+      || fail 'could not register the owned delivery'
+    registered_checks "$home" >/dev/null
+    jq -n --arg head "$HEAD_A" --arg login "$login" --arg type "$type" --arg state "$state" --arg body "$(automated_review_body "$body")" '
+      [{id:21,user:{login:$login,type:$type},author_association:"MEMBER",body:$body,
+        html_url:"https://github.com/o/r/pull/8#pullrequestreview-21",
+        submitted_at:"2026-09-16T08:01:00Z",commit_id:$head,state:$state}]' > "$home/forge/reviews.json"
+    if [ "$inline" = yes ]; then
+      jq -n --arg head "$HEAD_A" --arg login "$login" '[{id:31,pull_request_review_id:21,user:{login:$login},
+        author_association:"MEMBER",body:"Rename this flag",html_url:"https://github.com/o/r/pull/8#discussion_r31",
+        updated_at:"2026-09-16T08:01:00Z",commit_id:$head}]' > "$home/forge/inline.json"
+    fi
+    registered_checks "$home" >/dev/null
+    if [ "$expect" = settled ]; then
+      jq -e '.records[0].pending == [] and (.records[0].notified | length) == 1
+        and (.records[0].observation.reviews | length) == 1' "$home/data/delivery/contributions.json" >/dev/null \
+        || fail "the $case review must be settled while the observation keeps it"
+      [ ! -s "$home/state/.wake-queue" ] || fail "the $case review must not wake: $(cat "$home/state/.wake-queue")"
+    else
+      jq -e 'any(.records[0].pending[]; .type == "review")' "$home/data/delivery/contributions.json" >/dev/null \
+        || fail "the $case review must stay pending"
+      [ -s "$home/state/.wake-queue" ] || fail "the $case review must wake"
+    fi
+  done <<'CASES'
+zero-findings|review-bot|User|COMMENTED|zero|no|yes|settled
+listed-case-insensitively|REVIEW-BOT|User|APPROVED|zero|no|yes|settled
+resolved-item|review-bot|User|COMMENTED|resolved|no|yes|settled
+resolved-section|review-bot|User|COMMENTED|fixed_lead|no|yes|settled
+app-login|falcon[bot]|Bot|COMMENTED|zero|no|yes|settled
+open-finding|review-bot|User|COMMENTED|open|no|yes|wakes
+unresolved-count|review-bot|User|COMMENTED|counted_open|no|yes|wakes
+inline-comment|review-bot|User|COMMENTED|zero|yes|yes|wakes
+human|maintainer|User|COMMENTED|zero|no|yes|wakes
+changes-requested|review-bot|User|CHANGES_REQUESTED|zero|no|yes|wakes
+not-opted-in|review-bot|User|COMMENTED|zero|no|no|wakes
+CASES
+  pass 'routine PR outcomes settle an automated review with zero or only resolved findings, and nothing else'
+}
+
 test_ready_issue_wake() {
   local home count
   home=$(new_home ready)
@@ -1340,7 +1400,7 @@ test_retire_is_idempotent_and_refuses_unknown_pairs() {
 }
 
 failures=0
-for test_name in test_actor_coverage test_routine_pr_outcomes_settle_bodiless_reviews test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_verdict_actor_values_are_discoverable test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_unsupported_poll_is_silent_and_clears_legacy_errors test_legacy_cleanup_preserves_supported_failure test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_record_task_identity_matches_dirname_basename test_read_only_views_create_no_state test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_interrupted_multi_owner_poll_settles_every_owner test_done_task_open_pr_still_observed test_reservation_defers_later_url_when_fifteen_seconds_do_not_remain test_three_second_pr_reads_complete_fresh_in_one_cycle test_slow_read_deadline_kill_is_budget_refusal test_unmeasured_url_does_not_starve_the_tail test_budget_is_cut_down_to_the_watcher_check_bound test_arm_plumbs_a_configured_budget_into_the_check_shim test_unavailable_forge_records_error_and_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed test_retire_ends_observation_of_a_gone_contribution test_late_owner_of_a_retired_final_contribution_is_not_retired test_retire_is_idempotent_and_refuses_unknown_pairs; do
+for test_name in test_actor_coverage test_routine_pr_outcomes_settle_bodiless_reviews test_routine_pr_outcomes_settle_automated_reviews_without_open_findings test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_verdict_actor_values_are_discoverable test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_unsupported_poll_is_silent_and_clears_legacy_errors test_legacy_cleanup_preserves_supported_failure test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_record_task_identity_matches_dirname_basename test_read_only_views_create_no_state test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_interrupted_multi_owner_poll_settles_every_owner test_done_task_open_pr_still_observed test_reservation_defers_later_url_when_fifteen_seconds_do_not_remain test_three_second_pr_reads_complete_fresh_in_one_cycle test_slow_read_deadline_kill_is_budget_refusal test_unmeasured_url_does_not_starve_the_tail test_budget_is_cut_down_to_the_watcher_check_bound test_arm_plumbs_a_configured_budget_into_the_check_shim test_unavailable_forge_records_error_and_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed test_retire_ends_observation_of_a_gone_contribution test_late_owner_of_a_retired_final_contribution_is_not_retired test_retire_is_idempotent_and_refuses_unknown_pairs; do
   ( "$test_name" ) || failures=$((failures + 1))
 done
 [ "$failures" -eq 0 ] || fail "$failures contribution regressions"
