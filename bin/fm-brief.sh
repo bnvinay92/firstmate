@@ -484,20 +484,21 @@ if [ -e "$CONFIG/wait-no-turns" ]; then
   WAIT_BLOCK="$WAIT_SECTION"$'\n\n'
 fi
 
-# How a crewmate or scout gates its heavy local work on machine headroom.
-# Emitted only when this machine opts in through config/spawn-headroom;
-# bin/fm-headroom-gate.sh owns that test, the gate's exit codes, and
-# its bounded wait.
+# How a crewmate or scout gates its heavy local work on machine headroom and
+# the machine's build slots. Emitted only when this machine opts in through
+# config/spawn-headroom; bin/fm-headroom-gate.sh owns that test, the --run
+# wrapper and its slots, the gate's exit codes, and its bounded wait.
 HEADROOM_BLOCK=
 if FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-headroom-gate.sh" --declared 2>/dev/null; then
   HEADROOM_GATE="FM_HOME=$(shell_quote "$FM_HOME") $(shell_quote "$FM_ROOT/bin/fm-headroom-gate.sh")"
   IFS= read -r -d '' HEADROOM_BLOCK <<EOF || true
 # Machine headroom
-This machine gates heavy local work on its measured memory and disk headroom.
-Before you start a heavy build, test suite, emulator, or simulator - a Gradle or Xcode build, a full test run, a device boot - run \`$HEADROOM_GATE\`; it prints one line.
-Exit 0 means start the work.
-Exit 75 means the machine is short: do not start that work yet; append \`$PAUSED_VERB [at=<epoch>]: {the work} waits for headroom: {the gate's line after "wait: "}\` once, then run \`$HEADROOM_GATE --wait <seconds> --since <that epoch>\` as one blocking command, with the seconds a little under your shell tool's timeout, and run it again while it exits 75.
-When it exits 0, append \`resolved [at=<epoch>]: {its line}\` and start the work.
+This machine gates heavy local work on its measured memory and disk headroom and on how many heavy builds already run on it.
+Run every heavy build, test suite, emulator, or simulator command - a Gradle or Xcode build, a full test run, a device boot - through the wrapper \`$HEADROOM_GATE --run -- <command>\`, one wrapper per command.
+When a script or batch starts several heavy commands, wrap each of those commands where the script starts it; never wrap or check once for a script or batch that starts several.
+The wrapper prints its one line on stderr, and when it starts the command it holds a build slot until the command exits and then exits with the command's own status.
+Exit 75 with a \`wait:\` line means the machine is short and the command did not start: append \`$PAUSED_VERB [at=<epoch>]: {the work} waits for headroom: {the gate's line after "wait: "}\` once, then run \`$HEADROOM_GATE --wait <seconds> --since <that epoch> --run -- <command>\` as one blocking command, with the seconds a little under your shell tool's timeout, and run it again while it exits 75 with a \`wait:\` line.
+Once it starts the command, append \`resolved [at=<epoch>]: {its go line}\`.
 Never stop or interrupt work that is already running because of this check, and do not gate light commands such as a lint, a single-file compile, or git.
 
 EOF

@@ -312,6 +312,13 @@
 #     root still exists, so the account's healthy LaunchAgent worker and every
 #     live remote secondmate worker are out of scope. Best effort: a sweep
 #     failure never blocks this teardown.
+#   Fix 4 - stop the worker's idle build daemons. A Gradle daemon keeps its
+#     multi-gigabyte heap resident for hours after its last build and is not
+#     reachable by Fix 2, because its working directory is not the worktree.
+#     Right after Fix 2, bin/fm-daemon-reap.sh --inside the task's own
+#     worktree stops idle Gradle daemons whose last build ran in that worktree;
+#     it owns the idle-only rule, so a daemon another worker is building with
+#     is never touched. Best effort: a failure never blocks this teardown.
 # After Fix 1 and Fix 2, when config/pipeline-spend opts this home in, a ship
 # task whose local copy this teardown owns has its no-mistakes pipeline spend
 # recorded by bin/fm-pipeline-spend.sh, which owns the attribution and the
@@ -3437,7 +3444,7 @@ else
 fi
 
 # Every landed/discard-work refusal above has now passed (or --force skipped
-# them). Fix 1 and Fix 2 (see script header) run here, unconditionally on
+# them). Fix 1, Fix 2, and Fix 4 (see script header) run here, unconditionally on
 # --force, and before ANY destructive step below - a still-parked run or a
 # leaked process can own live work in this exact worktree. Not for
 # kind=secondmate: a secondmate home's own runtime lifecycle is owned by the
@@ -3446,6 +3453,7 @@ fi
 if [ "$KIND" != secondmate ] && teardown_owns_worktree; then
   conclude_task_no_mistakes_run "$WT"
   reap_task_worktree_processes worktree "$WT" "$TASK_TMP"
+  "$SCRIPT_DIR/fm-daemon-reap.sh" --inside "$WT" >&2 </dev/null || true
 elif [ "$KIND" != secondmate ]; then
   reap_task_worktree_processes tasktmp "$TASK_TMP"
 fi

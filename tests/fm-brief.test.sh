@@ -1173,7 +1173,8 @@ test_wait_no_turns_absent_keeps_the_previous_brief() {
 }
 
 # When the machine declares spawn headroom, ship and scout briefs teach the
-# worker to gate heavy local work through bin/fm-headroom-gate.sh; without it,
+# worker to run each heavy command through bin/fm-headroom-gate.sh's wrapper;
+# without it,
 # and in a secondmate charter, the brief carries no such section.
 test_spawn_headroom_declaration_adds_the_gate_section() {
   local home kind id brief gate
@@ -1194,8 +1195,11 @@ test_spawn_headroom_declaration_adds_the_gate_section() {
     fi
     brief="$home/data/$id/brief.md"
     assert_grep "# Machine headroom" "$brief" "$kind brief did not carry the headroom gate section"
-    assert_grep "run \`$gate\`; it prints one line." "$brief" "$kind brief did not name this home's gate command"
-    assert_grep "then run \`$gate --wait <seconds> --since <that epoch>\` as one blocking command" "$brief" \
+    assert_grep "through the wrapper \`$gate --run -- <command>\`, one wrapper per command." "$brief" \
+      "$kind brief did not name this home's wrapper command"
+    assert_grep "never wrap or check once for a script or batch that starts several." "$brief" \
+      "$kind brief let one check cover a script that starts several builds"
+    assert_grep "then run \`$gate --wait <seconds> --since <that epoch> --run -- <command>\` as one blocking command" "$brief" \
       "$kind brief did not teach the bounded wait"
     assert_grep "append \`paused [at=<epoch>]: {the work} waits for headroom" "$brief" \
       "$kind brief did not declare the headroom wait as paused"
