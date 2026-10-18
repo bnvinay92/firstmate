@@ -648,7 +648,14 @@ prefetch_task_observations() {  # <meta> <id>
     snapshot_mark_optional_present "$report_path" "$report_capture" || current_rc=1
   fi
 
-  if [ -n "$remote_host" ]; then
+  if [ -n "$remote_host" ] && [ "$(meta_value "$meta" remote_kind)" = worker ] && [ "$generation_current" = 1 ]; then
+    # A placed ship or scout's current state is read on its machine
+    # (bin/fm-crew-state.sh's remote worker arm); its endpoint is not probed
+    # from here.
+    crew_state_json "$id" "$meta" "$status_capture" > "$current_file" &
+    current_pid=$!
+    agent_alive=unknown
+  elif [ -n "$remote_host" ]; then
     jq -n '{state:"unknown",source:"none",detail:"remote endpoint liveness not collected by fleet snapshot",raw:""}' \
       > "$current_file" || current_rc=1
     agent_alive=unknown
@@ -744,7 +751,7 @@ prefetch_task_current_states() {
 
 task_json_lines() {
   local meta original_meta id kind harness mode yolo project worktree home projects spawn_gen backend target status_log report_path
-  local remote_host remote_root current_file endpoint_file observation_line index=0
+  local remote_host remote_root remote_machine current_file endpoint_file observation_line index=0
   local pr pr_source event_json current_json endpoint_exists agent_alive meta_json status_json report_json worktree_json home_json
   local last_event_raw current_state current_source pending_decision blocked_event report_present=0 pr_from_status
   local open_decisions_tsv open_decisions_json
@@ -767,6 +774,7 @@ task_json_lines() {
     branch=$(meta_value "$meta" branch)
     remote_host=$(meta_value "$meta" remote_host)
     remote_root=$(meta_value "$meta" remote_root)
+    remote_machine=$(meta_value "$meta" remote_machine)
     if [ -n "$remote_host" ]; then
       backend=$(meta_value "$meta" remote_backend)
       [ -n "$backend" ] || backend=unknown
@@ -846,7 +854,13 @@ task_json_lines() {
     meta_json=$(path_present_json "$original_meta" "$meta")
     status_json=$event_json
     report_json=$(path_present_json "$DATA/$id/report.md" "$report_path")
-    if [ -n "$worktree" ]; then worktree_json=$(path_present_json "$worktree"); else worktree_json=$(jq -n '{path:null,present:false}'); fi
+    if [ -n "$worktree" ] && [ -n "$remote_machine" ]; then
+      worktree_json=$(jq -n --arg path "$worktree" '{path:$path,present:null}')
+    elif [ -n "$worktree" ]; then
+      worktree_json=$(path_present_json "$worktree")
+    else
+      worktree_json=$(jq -n '{path:null,present:false}')
+    fi
     if [ -n "$home" ] && [ -n "$remote_host" ]; then
       home_json=$(jq -n --arg path "$home" '{path:$path,present:null}')
     elif [ -n "$home" ]; then
@@ -871,6 +885,7 @@ task_json_lines() {
       --arg target "$target" \
       --arg remote_host "$remote_host" \
       --arg remote_root "$remote_root" \
+      --arg remote_machine "$remote_machine" \
       --arg pr "$pr" \
       --arg pr_source "$pr_source" \
       --arg pr_head "$(meta_value "$meta" pr_head)" \
@@ -898,7 +913,9 @@ task_json_lines() {
         project:($project // ""),
         spawn_gen:($spawn_gen | if . == "" then null else . end),
         backend:$backend,
-        remote:(if $remote_host == "" then null else {host:$remote_host,root:$remote_root} end),
+        remote:(if $remote_host == "" then null
+                elif $remote_machine == "" then {host:$remote_host,root:$remote_root}
+                else {host:$remote_host,root:$remote_root,machine:$remote_machine} end),
         paths:{
           meta:$meta_path,
           status_log:$status_log,

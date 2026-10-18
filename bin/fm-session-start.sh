@@ -901,7 +901,24 @@ for meta in "$STATE"/*.meta; do
 
   window=$(fm_meta_get "$meta" window)
   target=$(fm_backend_target_of_meta "$meta")
-  if [ -n "$window" ]; then
+  remote_host=$(fm_meta_get "$meta" remote_host)
+  if [ -n "$remote_host" ] && [ "$(fm_meta_get "$meta" remote_kind)" = worker ]; then
+    # A placed worker's endpoint lives on its machine (docs/remote-workers.md):
+    # ask that machine, bounded, and never read an unreachable one as dead,
+    # because a dead verdict here invites a local relaunch of a live worker.
+    remote_machine=$(fm_meta_get "$meta" remote_machine)
+    remote_state=$(fm_run_timed "$ENDPOINT_TIMEOUT" "$SCRIPT_DIR/fm-on.sh" --machine "$remote_machine" \
+      fm-remote-worker-control.sh state "$id" < /dev/null 2>/dev/null | tail -n 1) || remote_state=
+    case "$remote_state" in
+      alive) printf 'endpoint: alive (machine=%s window=%s)\n' "$remote_machine" "$window" ;;
+      dead|missing|missing-record)
+        printf 'endpoint: %s on machine %s (window=%s; recover it there with bin/fm-control.sh %s relaunch, never with a local spawn)\n' \
+          "$remote_state" "$remote_machine" "$window" "$id" ;;
+      *) printf 'endpoint: unknown (machine %s unreachable or unreadable; not proof of death)\n' "$remote_machine" ;;
+    esac
+  elif [ -n "$remote_host" ]; then
+    printf 'endpoint: remote (host=%s window=%s; the secondmate liveness check owns its state)\n' "$remote_host" "$window"
+  elif [ -n "$window" ]; then
     backend=$(fm_backend_of_meta "$meta")
     endpoint_rc=0
     fm_session_start_endpoint_read "$backend" "${target:-$window}" "fm-$id" || endpoint_rc=$?

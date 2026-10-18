@@ -20,7 +20,9 @@
 # .claude.json and keys its macOS Keychain entry to any CLAUDE_CONFIG_DIR that
 # is set, even $HOME/.claude; for Pi it is $HOME/.pi/agent. Any other value is
 # one absolute path to an existing readable, searchable directory. Firstmate
-# never copies credentials or changes a global login.
+# never changes a global login, and copies credentials only in one place:
+# placing a worker on another machine installs this home's current Claude
+# login there (bin/fm-remote-worker-lib.sh owns that boundary).
 #
 # A Pi root can hold several provider identities, so config/pi-account names
 # the root on line 1 and the providers that home may spend on line 2,

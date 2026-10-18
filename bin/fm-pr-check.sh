@@ -166,8 +166,22 @@ case "$PROVIDER:$MODE" in
   *:no-mistakes|*:) DONE_LINE="done: PR $URL checks green" ;;
   *) DONE_LINE="done: PR $URL" ;;
 esac
+# A ship placed on a worker machine (remote_kind=worker; docs/remote-workers.md)
+# has its copy and branch refs on that machine, so the same acceptance runs
+# there against the worker's host-local record; an unanswering machine refuses.
+pr_check_accept_done() {
+  local machine
+  if grep -qx 'remote_kind=worker' "$META" 2>/dev/null; then
+    machine=$(grep '^remote_machine=' "$META" | tail -1 | cut -d= -f2-)
+    "$SCRIPT_DIR/fm-on.sh" --machine "$machine" fm-remote-worker-control.sh accept-done "$ID" "$DONE_LINE" \
+      < /dev/null 2>&1 && return 0
+    [ "$?" -ne 255 ] || printf '%s\n' "machine $machine did not answer, so the named head could not be verified there; retry once it is reachable"
+    return 1
+  fi
+  fm_dod_accept_ship_done "${KIND:-ship}" "$MODE" "$WT" "$PROJECT" "$DONE_LINE" "$STATE" "$ID" "$META"
+}
 if { [ -z "$PR_HEAD" ] || ! fm_dod_forge_head_is_named_head "$MODE"; } \
-  && ! GATE_REASON=$(fm_dod_accept_ship_done "${KIND:-ship}" "$MODE" "$WT" "$PROJECT" "$DONE_LINE" "$STATE" "$ID" "$META"); then
+  && ! GATE_REASON=$(pr_check_accept_done); then
   echo "error: $GATE_REASON" >&2
   exit 1
 fi
