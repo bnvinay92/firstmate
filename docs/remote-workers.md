@@ -25,15 +25,16 @@ A worker machine meets the same host requirements as a remote secondmate host:
 - An SSH alias on the spawning machine with public-key authentication and strict host-key checking ([prerequisites](remote-secondmates.md#prerequisites)).
 - A Firstmate clone on the machine as its code root, with the fixed entrypoint on the account's non-interactive SSH `PATH`.
   That code root must already contain this release, because the scripts below run from it.
-- The [non-interactive tool contract](remote-secondmates.md#non-interactive-tool-contract), including `herdr`, `jq`, `tasks-axi`, `treehouse`, `git`, `gh`, and `claude`.
+- The [non-interactive tool contract](remote-secondmates.md#non-interactive-tool-contract), including `herdr`, `jq`, `tasks-axi`, `treehouse`, `headroom-axi`, `git`, `gh`, and `claude`.
+- Node.js 22.19 or later with `npm` on that PATH, so the doctor can install `headroom-axi` ([headroom](#headroom-on-a-worker-machine)).
 - Git access to each project's origin from that account, because the machine clones its own copies of the projects.
 - The parent directory of the worker-host home must exist; the home itself is created on first use.
 
 `bin/fm-remote-doctor.sh` remains the single readiness owner.
-Every placement runs it through the machine route (read-only, then `--fix`, then a read-only verdict), so the machine's job worker and its `fm-remote` Herdr server are started on the worker machine when they are missing.
+Every placement runs it through the machine route with `--worker-machine` (read-only, then `--fix`, then a read-only verdict), so the machine's job worker and its `fm-remote` Herdr server are started on the worker machine when they are missing, and `headroom-axi` is installed there when it is missing or cannot measure the machine.
 
 ```sh
-bin/fm-on.sh --machine <machine-id> fm-remote-doctor.sh
+bin/fm-on.sh --machine <machine-id> fm-remote-doctor.sh --worker-machine
 ```
 
 ## Register a machine
@@ -60,14 +61,42 @@ The spawn checks the usual fresh-spawn gates and the backlog item first, then on
 
 1. Readiness through the doctor.
 2. The machine's code root follows this home's default-branch commit when that fast-forward is safe; otherwise it warns and continues.
-3. This machine's current Claude login is installed for the launch.
-4. The project is cloned from its validated origin into the worker-host home.
+3. The machine's own [headroom admission](#headroom-on-a-worker-machine): a short machine defers the spawn with one `deferred:` line and exit 75 before anything else is staged there.
+4. This machine's current Claude login is installed for the launch.
+5. The project is cloned from its validated origin into the worker-host home.
    A first clone runs detached; until it finishes, the spawn prints one `deferred:` line and exits 75 so the task stays queued, exactly like a [capacity deferral](configuration.md#project-capacity-configproject-capacity).
-5. The brief is re-rendered there, so every path the worker reads is a path on that machine, and the filled `# Task` and `# Home brief additions` sections are spliced in, with a short placement note.
-6. The ordinary `fm-spawn.sh` runs there on the Herdr backend in the `fm-remote` session; its isolation assertion, slot claim, capacity, and headroom checks are the machine's own.
+6. The brief is re-rendered there, so every path the worker reads is a path on that machine, and the filled `# Task` and `# Home brief additions` sections are spliced in, with a short placement note.
+7. The ordinary `fm-spawn.sh` runs there on the Herdr backend in the `fm-remote` session; its isolation assertion, slot claim, capacity, and headroom checks are the machine's own.
 
 The spawning home then records `window=remote:<task-id>` with `remote_kind=worker`, `remote_machine=`, `remote_host=`, `remote_root=`, `remote_home=`, `remote_target=`, and the machine's worktree path, moves the backlog item to In flight, and arms the status mirror.
 [`bin/fm-remote-worker-spawn.sh`](../bin/fm-remote-worker-spawn.sh) owns that sequence, and [`bin/fm-remote-worker-control.sh`](../bin/fm-remote-worker-control.sh) owns the machine-side verbs.
+
+## Headroom on a worker machine
+
+A worker machine bounds its own memory and disk load exactly as [spawn headroom](configuration.md#spawn-headroom-configspawn-headroom) bounds this machine's, and this machine's thresholds and measurements never apply to it.
+
+- The declaration lives in the spawning home as `config/spawn-headroom.<machine-id>`, in the `config/spawn-headroom` format, with `min-ram`, `min-disk`, `pressure`, `max-wait`, and `max-builds` as needed.
+  Every placement validates it here, refusing an unreadable one, and installs it as the worker-host home's `config/spawn-headroom` when it changed, so edit it here: a hand edit on the machine is replaced at the next placement.
+  Without the file here, the machine keeps whatever declaration its worker-host home already has.
+- The placement then measures the machine with the machine's own `headroom-axi`, before the login, the clone, or the brief is staged there.
+  A short machine defers the spawn with one `deferred:` line naming the machine's verdict and its largest consumers, and exits 75, so the backlog item stays queued and firstmate dispatches it again at its ordinary queue re-evaluation.
+  A machine with no declaration, or one that could not be measured, is placed with a `warning:` line naming why, as locally.
+- The brief rendered on the machine carries the "Machine headroom" section with the machine's own gate, so a placed worker's heavy builds wait for the machine's headroom and take one of the machine's build slots, counted across every worker placed there.
+- A placed worker counts toward the worker-host home's own `config/project-capacity` on the machine, which is declared there by hand; this home's capacity file never applies to it.
+
+The doctor's worker-machine pass installs `headroom-axi` when it is missing, and updates it when it cannot measure the machine, by running `npm install -g github:bnvinay92/headroom-axi` with the account's own npm.
+npm clones that repository with the account's git credentials, so the account needs read access to it.
+When npm's global bin directory is not on the runtime PATH, the doctor adds a Firstmate-owned `~/.local/bin/headroom-axi` wrapper for it, and it never replaces a wrapper it did not write.
+To update the machine's copy by hand, rerun that npm command on the machine.
+
+On Linux, `headroom-axi` measures the kernel's own figures, so set the thresholds for what it reports there:
+
+- Available memory is `MemAvailable` from `/proc/meminfo`.
+- Free disk is `df` of the account's home directory, which is the volume the worker-host home and its build caches normally live on.
+- Memory pressure comes from the 10-second averages in `/proc/pressure/memory` (PSI): `critical` at a `full` stall of at least 10% or a `some` stall of at least 40%, `warn` at `full` 1% or `some` 10%, and `normal` otherwise.
+  Without PSI it falls back to `MemAvailable` below 5% of total memory for `critical` and below 15% for `warn`.
+  These levels do not match macOS's memory-pressure levels, and a 10-second average reacts to short stalls, so `pressure critical` is the steadier choice for a Linux machine unless `warn` has proved quiet there.
+- Inside WSL2 every figure describes the WSL virtual machine, whose memory limit comes from the Windows-side `.wslconfig`, not the Windows host; that limit is the one a build runs into, so declare the thresholds against it.
 
 ## The Claude account follows the spawning machine
 
@@ -100,7 +129,7 @@ Every ordinary command keeps working on a placed worker's task id, and each one 
 | Current state and peek | `fm-crew-state.sh` runs on the machine against the worker's own record and relays its line; `fm-peek.sh` captures the remote pane. |
 | Lifecycle | `fm-control.sh <id>` with `interrupt`, `exit`, or `relaunch` runs the ordinary control plane on the machine; a relaunch republishes this home's record from the route the machine confirmed. |
 | PR handoff | `fm-pr-check.sh` asks the machine to verify the worker's named head is pushed, because the copy lives there; merging and the merge watch talk to the forge from here as for any ship. |
-| Capacity | A placed worker holds a place only in the machine's own project-capacity count, never in this machine's. |
+| Capacity and headroom | A placed worker holds a place only in the machine's own project-capacity count, and is admitted and gated only by the machine's own [headroom](#headroom-on-a-worker-machine), never by this machine's. |
 | Session start | The digest asks the machine for the endpoint's state, bounded, and prints an unreachable machine as unknown. |
 | Fleet view | The fleet snapshot carries the machine name and the machine's current-state line. |
 | Cleanup | `fm-teardown.sh <id>` runs the ordinary teardown on the machine, so the landed-work test reads that machine's worktree, branch refs, and forge login; only then does this home close the backlog item and remove its record. A scout's report is copied here first. |
@@ -120,7 +149,8 @@ The portable tests use a deterministic SSH boundary over the real entrypoint and
 ```sh
 bin/fm-test-run.sh tests/fm-worker-machine-lib.test.sh
 bin/fm-test-run.sh tests/fm-remote-worker-lifecycle-e2e.test.sh
+bin/fm-test-run.sh tests/fm-remote-doctor.test.sh
 ```
 
-They cannot prove a real worker machine, a real Herdr server, or a real Claude login.
+They cannot prove a real worker machine, a real Herdr server, a real `headroom-axi` install, or a real Claude login.
 A real-host smoke test places a trivial scout with `--machine`, steers it once, confirms the mirrored status and copied report, and cleans it up.

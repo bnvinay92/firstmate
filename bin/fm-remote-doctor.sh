@@ -2,7 +2,7 @@
 # Check, and optionally repair, one remote account's second-mate readiness.
 #
 # Usage:
-#   bin/fm-on.sh <secondmate-id|ssh-alias> fm-remote-doctor.sh [--fix]
+#   bin/fm-on.sh {<secondmate-id|ssh-alias>|--machine <machine-id>} fm-remote-doctor.sh [--worker-machine] [--fix]
 #
 # Run it through fm-on.sh so the fixed entrypoint invokes this readiness owner
 # over its plain SSH bootstrap. The command reports the same filesystem-composed
@@ -26,6 +26,14 @@
 # SSH cannot create an Aqua session, so a host with no GUI login is a human
 # gap rather than something --fix attempts to bypass.
 #
+# --worker-machine checks the account as a worker machine for individually
+# placed ship and scout workers (docs/remote-workers.md), which
+# bin/fm-remote-readiness-lib.sh passes for every --machine route. Such a
+# machine measures its own memory and disk before it admits a worker or a heavy
+# build (bin/fm-spawn-headroom-lib.sh), so headroom-axi joins the required
+# tools and the headroom-axi check confirms it can measure this host: it runs
+# `headroom-axi check --json` once and accepts a readable verdict.
+#
 # Line protocol, one fact per line, stable for script consumers:
 #   mode=check|fix
 #   path=<the child PATH this command inherited>
@@ -48,10 +56,14 @@
 # --fix is idempotent and closes only automatable gaps: it writes and reloads
 # both Firstmate-owned Aqua agents, starts the Linux workers where no Aqua agent
 # applies, recreates the entrypoint symlink, and may add an owned ~/.local/bin
-# wrapper for a required tool it can discover under nvm, asdf, or mise. It never
-# installs packages, creates a login session, writes an auto-login password,
-# changes FileVault, stores an account password, or replaces a non-Firstmate
-# wrapper; those remain reported gaps.
+# wrapper for a required tool it can discover under nvm, asdf, or mise. On a
+# worker machine it also installs or updates headroom-axi when that check is
+# not ok, with the account's own npm from HEADROOM_AXI_SOURCE (npm clones it
+# with the account's git credentials), and adds an owned ~/.local/bin wrapper
+# when npm's global bin directory is not on the runtime PATH. Apart from that
+# one package it never installs packages, and it never creates a login session,
+# writes an auto-login password, changes FileVault, stores an account password,
+# or replaces a non-Firstmate wrapper; those remain reported gaps.
 set -eu
 
 # Resolve this script's directory with builtins only: a host missing a required
@@ -70,6 +82,8 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(CDPATH='' cd "$SCRIPT_DIR/.." && pwd -P)}"
 REQUIRED_TOOLS=(git jq herdr tasks-axi treehouse)
 HARNESS_TOOLS=(claude codex opencode pi pi-signed grok kimi)
 OPTIONAL_TOOLS=(tmux no-mistakes gh)
+# Where --fix installs headroom-axi from on a worker machine.
+HEADROOM_AXI_SOURCE=github:bnvinay92/headroom-axi
 LAUNCH_AGENT_LABEL=dev.firstmate.herdr.fm-remote
 # The dedicated remote-secondmate session. The user's interactive Herdr work
 # remains in the separate default session, which this readiness check never
@@ -84,17 +98,21 @@ ENTRYPOINT_LINK="${HOME:-}/.local/bin/fm-remote-entrypoint.sh"
 usage() { sed -n '2,5p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 MODE=check
-case "${1:-}" in
-  '') ;;
-  --fix) MODE=fix; shift ;;
-  --worker-tool-probe)
-    [ "${FM_REMOTE_JOB_ACTIVE:-}" = 1 ] || { printf 'error: worker tool probe requires the remote job worker\n' >&2; exit 64; }
-    MODE='worker-tool-probe'
-    shift
-    ;;
-  *) usage ;;
-esac
-[ "$#" -eq 0 ] || usage
+WORKER_MACHINE=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --worker-machine) WORKER_MACHINE=1 ;;
+    --fix) [ "$MODE" = check ] || usage; MODE=fix ;;
+    --worker-tool-probe)
+      [ "$MODE" = check ] || usage
+      [ "${FM_REMOTE_JOB_ACTIVE:-}" = 1 ] || { printf 'error: worker tool probe requires the remote job worker\n' >&2; exit 64; }
+      MODE='worker-tool-probe'
+      ;;
+    *) usage ;;
+  esac
+  shift
+done
+[ "$WORKER_MACHINE" -eq 0 ] || REQUIRED_TOOLS+=(headroom-axi)
 
 PLATFORM=$(fm_remote_job_platform)
 UID_NUM=$(id -u 2>/dev/null) || UID_NUM=
@@ -451,9 +469,11 @@ report_required_tools() {
 
 report_required_tools_from_worker() {
   local job_id probe_stdout probe_stderr probe_exit line fact name value
-  local expected=6 count=0 valid=1 seen=' '
+  local expected=$((${#REQUIRED_TOOLS[@]} + 1)) count=0 valid=1 seen=' '
+  local -a probe_args=(--worker-tool-probe)
+  [ "$WORKER_MACHINE" -eq 0 ] || probe_args+=(--worker-machine)
   if ! job_id=$(fm_remote_job_stage "${HOME:-}" "$FM_ROOT" "${FM_HOME:-}" \
-    fm-remote-doctor.sh --worker-tool-probe </dev/null); then
+    fm-remote-doctor.sh "${probe_args[@]}" </dev/null); then
     set_check remote-job-probe "fixable: the remote job worker could not accept the required-tool probe" \
       "rerun this command with --fix to restart the worker"
     report_required_tools
@@ -475,7 +495,7 @@ report_required_tools_from_worker() {
     fact=${line#required }
     name=${fact%%=*}
     value=${fact#*=}
-    case "$name" in git|jq|herdr|tasks-axi|treehouse|harness) ;; *) valid=0; continue ;; esac
+    case " ${REQUIRED_TOOLS[*]} harness " in *" $name "*) ;; *) valid=0; continue ;; esac
     case "$seen" in *" $name "*) valid=0; continue ;; esac
     seen="$seen$name "
     count=$((count + 1))
@@ -718,6 +738,36 @@ check_entrypoint_link() {
     "rerun this command with --fix to create it"
 }
 
+# A worker machine's headroom-axi must measure this host, not merely resolve:
+# a copy that predates this platform's support exits 2 and measures nothing.
+check_headroom_axi() {
+  local resolved out rc=0 line
+  [ "$WORKER_MACHINE" -eq 1 ] || return 0
+  if ! resolved=$(command -v headroom-axi 2>/dev/null) || [ ! -x "$resolved" ]; then
+    if command -v npm >/dev/null 2>&1; then
+      record headroom-axi "fixable: headroom-axi is not installed, so this worker machine cannot measure its own headroom" \
+        "rerun this command with --fix to install it with npm from $HEADROOM_AXI_SOURCE"
+    else
+      record headroom-axi "human: headroom-axi is not installed and npm does not resolve on the remote runtime PATH" \
+        "install Node.js 22.19 or later with npm on that account, then rerun this command with --fix; or install it by hand with 'npm install -g $HEADROOM_AXI_SOURCE' and put it on that PATH"
+    fi
+    return 0
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    record headroom-axi "human: headroom-axi's verdict cannot be read without jq on the remote runtime PATH" \
+      "install the missing tool reported above, then rerun this command"
+    return 0
+  fi
+  out=$(headroom-axi check --json --min-ram 1M 2>&1 </dev/null) || rc=$?
+  line=$(printf '%s\n' "$out" | jq -r 'if type == "object" and (.line | type) == "string" then .line else empty end' 2>/dev/null | head -n 1)
+  if { [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ]; } && [ -n "$line" ]; then
+    record headroom-axi "ok: $resolved measures this host: $line"
+    return 0
+  fi
+  record headroom-axi "fixable: $resolved does not measure this host (exit $rc: $(printf '%s\n' "$out" | head -n 1))" \
+    "rerun this command with --fix to update it with npm from $HEADROOM_AXI_SOURCE"
+}
+
 run_checks() { # <resolved-login-shell>
   local shell=$1
   CHECK_NAMES=()
@@ -729,6 +779,7 @@ run_checks() { # <resolved-login-shell>
   check_launch_agent "$shell"
   check_herdr_server
   check_entrypoint_link
+  check_headroom_axi
 }
 
 # --- repairs ----------------------------------------------------------------
@@ -830,6 +881,58 @@ link_entrypoint() {
   fix_report entrypoint-link applied "linked $ENTRYPOINT_LINK to $want"
 }
 
+# Install or update headroom-axi with the account's own npm, then make sure the
+# runtime PATH resolves it: npm's global bin directory when it is already on
+# that PATH, otherwise an owned ~/.local/bin wrapper that puts npm's own
+# directory first so the package's node shebang finds the same node.
+install_headroom_axi() {
+  local npm npm_dir prefix target wrapper tmp out rc=0 resolved
+  if ! npm=$(command -v npm 2>/dev/null) || [ ! -x "$npm" ]; then
+    fix_report headroom-axi failed "npm does not resolve on the remote runtime PATH"
+    return 1
+  fi
+  out=$(GIT_TERMINAL_PROMPT=0 "$npm" install -g "$HEADROOM_AXI_SOURCE" 2>&1 </dev/null) || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fix_report headroom-axi failed "npm install -g $HEADROOM_AXI_SOURCE exited $rc: $(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -n 1)"
+    return 1
+  fi
+  prefix=$("$npm" prefix -g 2>/dev/null </dev/null) || prefix=
+  target="$prefix/bin/headroom-axi"
+  if [ -z "$prefix" ] || [ ! -x "$target" ]; then
+    fix_report headroom-axi failed "npm reported success but left no executable headroom-axi under its global prefix ${prefix:-(unknown)}"
+    return 1
+  fi
+  resolved=$(command -v headroom-axi 2>/dev/null || true)
+  if [ -n "$resolved" ] && [ -x "$resolved" ]; then
+    fix_report headroom-axi applied "installed $HEADROOM_AXI_SOURCE with npm; $resolved resolves it"
+    return 0
+  fi
+  wrapper="${HOME:-}/.local/bin/headroom-axi"
+  if { [ -e "$wrapper" ] || [ -L "$wrapper" ]; } && ! wrapper_is_firstmate_owned "$wrapper"; then
+    fix_report headroom-axi failed "installed $HEADROOM_AXI_SOURCE, but $wrapper exists and is not Firstmate-owned"
+    return 1
+  fi
+  if ! mkdir -p "${HOME:-}/.local/bin" 2>/dev/null || [ -L "${HOME:-}/.local/bin" ]; then
+    fix_report headroom-axi failed "cannot create ${HOME:-}/.local/bin"
+    return 1
+  fi
+  npm_dir=${npm%/*}
+  tmp="${HOME:-}/.local/bin/.headroom-axi.tmp.$$"
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' '# Firstmate remote tool wrapper v1'
+    # shellcheck disable=SC2016 # $PATH expands when the wrapper runs.
+    printf 'PATH=%q:$PATH\n' "$npm_dir"
+    printf 'exec %q "$@"\n' "$target"
+  } > "$tmp" || { rm -f -- "$tmp"; fix_report headroom-axi failed "cannot write $wrapper"; return 1; }
+  if ! chmod 0700 "$tmp" || ! mv -f -- "$tmp" "$wrapper"; then
+    rm -f -- "$tmp"
+    fix_report headroom-axi failed "cannot publish $wrapper"
+    return 1
+  fi
+  fix_report headroom-axi applied "installed $HEADROOM_AXI_SOURCE with npm and linked $target at $wrapper"
+}
+
 apply_fixes() { # <resolved-login-shell>
   local shell=$1 i name value launch_agent_written=0 launch_agent_reloaded=0 remote_job_fixed=0
   repair_required_wrappers
@@ -873,6 +976,7 @@ apply_fixes() { # <resolved-login-shell>
         start_herdr_server || true
         ;;
       entrypoint-link) link_entrypoint || true ;;
+      headroom-axi) install_headroom_axi || true ;;
     esac
   done
 }
@@ -943,7 +1047,15 @@ if [ "${#MISSING[@]}" -gt 0 ] || [ "${#GAPS[@]}" -gt 0 ]; then
   for i in ${GAPS[@]+"${GAPS[@]}"}; do
     NAMES="${NAMES:+$NAMES }${CHECK_NAMES[$i]}"
   done
-  printf 'error: this host is not ready for a remote second mate%s\n' "${NAMES:+; unresolved: $NAMES}" >&2
+  if [ "$WORKER_MACHINE" -eq 1 ]; then
+    printf 'error: this host is not ready as a worker machine%s\n' "${NAMES:+; unresolved: $NAMES}" >&2
+  else
+    printf 'error: this host is not ready for a remote second mate%s\n' "${NAMES:+; unresolved: $NAMES}" >&2
+  fi
   exit 1
 fi
-printf 'ok: remote second-mate readiness confirmed on this host\n'
+if [ "$WORKER_MACHINE" -eq 1 ]; then
+  printf 'ok: worker-machine readiness confirmed on this host\n'
+else
+  printf 'ok: remote second-mate readiness confirmed on this host\n'
+fi

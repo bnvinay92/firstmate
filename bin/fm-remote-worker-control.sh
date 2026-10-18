@@ -6,6 +6,7 @@
 # Usage:
 #   fm-remote-worker-control.sh sync <commit>
 #   fm-remote-worker-control.sh account claude            (stdin: credential payload)
+#   fm-remote-worker-control.sh admit <id>                (stdin: the spawning home's headroom declaration for this machine, or nothing)
 #   fm-remote-worker-control.sh prepare <project> <origin-url> <registry-line>
 #   fm-remote-worker-control.sh brief <id> <project> <ship|scout> <mode> <branch-prefix> <base-branch> <forge> <machine>
 #                                                         (stdin: the spawning home's filled brief)
@@ -53,6 +54,24 @@
 # worker-host home, which config/claude-account then pins for every launch
 # here (bin/fm-worker-account-lib.sh). Nothing is printed from the payload.
 #
+# admit is this machine's spawn headroom admission for one placement, run
+# before anything else is staged for it. A non-empty stdin is the spawning
+# home's declaration for this machine (config/spawn-headroom.<machine-id>
+# there); it is validated and installed as this worker-host home's
+# config/spawn-headroom, which is this machine's root-home declaration, so the
+# ordinary spawn's admission, the brief's "Machine headroom" gate, and the
+# machine-wide build slots all read it. Empty stdin keeps whatever declaration
+# this machine already has. The verdict is the ordinary one
+# (bin/fm-spawn-headroom-lib.sh owns the format and the verdict), measured with
+# this machine's own headroom-axi. Output lines:
+#   headroom: installed <path>     the sent declaration replaced this machine's
+#   headroom: none <path>          no declaration here, so nothing is measured
+#   warning: <why>                 admitted unmeasured (headroom-axi missing or failing)
+#   deferred: <verdict>            exit 75: short of headroom, nothing staged
+#   admit: ok | admit: placed      admitted, or <id> already runs here (a
+#                                  rerun adopts it, so it is never re-measured)
+# An unreadable declaration, sent or already here, refuses with exit 1.
+#
 # prepare clones a project into the worker-host home from its validated origin
 # (bin/fm-project-origin-lib.sh). A clone runs detached in a staging directory
 # and is published by rename once complete; until then prepare exits 75 with a
@@ -97,6 +116,10 @@ SCHEMA=fm-remote-worker-control.v1
 . "$SCRIPT_DIR/fm-busy-lib.sh"
 # shellcheck source=bin/fm-project-origin-lib.sh
 . "$SCRIPT_DIR/fm-project-origin-lib.sh"
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
+# shellcheck source=bin/fm-spawn-headroom-lib.sh
+. "$SCRIPT_DIR/fm-spawn-headroom-lib.sh"
 
 die() { printf 'error: %s\n' "$1" >&2; exit "${2:-1}"; }
 usage() { sed -n '2,${/^#/!q;p;}' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
@@ -226,6 +249,49 @@ cmd_account() {
     die "cannot pin the worker account"
   fi
   printf 'account: claude installed\n'
+}
+
+cmd_admit() {
+  local id=$1 tmp rc=0
+  validate_id "$id"
+  ensure_home
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-remote-worker-admit.XXXXXX") || die "cannot stage the headroom declaration"
+  head -c 65536 > "$tmp/spawn-headroom" || { rm -rf -- "$tmp"; die "cannot read the headroom declaration"; }
+  if [ -s "$tmp/spawn-headroom" ]; then
+    if ! fm_spawn_headroom_lookup "$tmp"; then
+      rm -rf -- "$tmp"
+      die "the spawn headroom declaration sent for this machine is unreadable (${FM_SPAWN_HEADROOM_ERROR#"$tmp/spawn-headroom "})"
+    fi
+    if ! cmp -s "$tmp/spawn-headroom" "$CONFIG/spawn-headroom" 2>/dev/null; then
+      [ ! -L "$CONFIG/spawn-headroom" ] || { rm -rf -- "$tmp"; die "$CONFIG/spawn-headroom is a symlink; refusing to replace it"; }
+      if ! cp -- "$tmp/spawn-headroom" "$CONFIG/.spawn-headroom.tmp.$$" ||
+        ! mv -f -- "$CONFIG/.spawn-headroom.tmp.$$" "$CONFIG/spawn-headroom"; then
+        rm -f -- "$CONFIG/.spawn-headroom.tmp.$$"
+        rm -rf -- "$tmp"
+        die "cannot install the spawn headroom declaration at $CONFIG/spawn-headroom"
+      fi
+      printf 'headroom: installed %s\n' "$CONFIG/spawn-headroom"
+    fi
+  fi
+  rm -rf -- "$tmp"
+  if [ -f "$(meta_path "$id")" ]; then
+    printf 'admit: placed\n'
+    return 0
+  fi
+  fm_spawn_headroom_lookup "$CONFIG" \
+    || die "this machine's spawn headroom declaration is unreadable ($FM_SPAWN_HEADROOM_ERROR)"
+  if [ -z "$FM_SPAWN_HEADROOM_ACTIVE" ]; then
+    printf 'headroom: none %s\n' "$FM_SPAWN_HEADROOM_FILE"
+    printf 'admit: ok\n'
+    return 0
+  fi
+  fm_spawn_headroom_admit || rc=$?
+  if [ "$rc" -eq "$FM_SPAWN_HEADROOM_DEFER_EXIT" ]; then
+    printf 'deferred: short of headroom for another worker (%s): %s\n' "$FM_SPAWN_HEADROOM_FILE" "$FM_SPAWN_HEADROOM_REASON"
+    exit "$FM_SPAWN_HEADROOM_DEFER_EXIT"
+  fi
+  [ -z "$FM_SPAWN_HEADROOM_WARNING" ] || printf 'warning: %s\n' "$FM_SPAWN_HEADROOM_WARNING"
+  printf 'admit: ok\n'
 }
 
 clone_in_progress() { # <project>
@@ -590,6 +656,7 @@ cmd_retire() {
 case "${1:-}" in
   sync) shift; [ "$#" -eq 1 ] || usage; cmd_sync "$@" ;;
   account) shift; [ "$#" -eq 1 ] || usage; cmd_account "$@" ;;
+  admit) shift; [ "$#" -eq 1 ] || usage; cmd_admit "$@" ;;
   prepare) shift; [ "$#" -eq 3 ] || usage; cmd_prepare "$@" ;;
   brief) shift; [ "$#" -eq 8 ] || usage; cmd_brief "$@" ;;
   launch) shift; [ "$#" -eq 10 ] || usage; cmd_launch "$@" ;;

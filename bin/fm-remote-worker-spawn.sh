@@ -25,14 +25,26 @@
 #      --fix, then a read-only verdict; bin/fm-remote-readiness-lib.sh).
 #   3. The machine's Firstmate code root follows this home's default-branch
 #      commit when that is safe; a skipped sync warns and continues.
-#   4. The current Claude login of this machine is installed there for this
+#   4. The machine's own spawn headroom admission, measured there by its own
+#      headroom-axi, never this machine's. This home's
+#      config/spawn-headroom.<machine-id>, when present, is that machine's
+#      declaration (bin/fm-spawn-headroom-lib.sh owns the format): it is
+#      validated here, then sent and installed as the worker-host home's
+#      config/spawn-headroom, which the machine's ordinary spawn admission, its
+#      brief's heavy-build gate, and its build slots all read. Without it the
+#      machine keeps whatever declaration it has. A short machine defers the
+#      spawn with one `deferred:` line and exit 75 before anything is staged
+#      there, exactly like a local headroom deferral; a machine with no
+#      declaration, or one it could not measure, is admitted with a `warning:`
+#      line, as locally.
+#   5. The current Claude login of this machine is installed there for this
 #      launch (bin/fm-remote-worker-lib.sh owns which login; the control
 #      script owns where it is stored).
-#   5. The project is cloned there from its validated origin. A first clone
+#   6. The project is cloned there from its validated origin. A first clone
 #      that is still running defers the spawn: one `deferred:` line and exit 75,
 #      the same contract a capacity deferral uses, so the task stays queued.
-#   6. The brief is re-rendered there with the filled Task section spliced in.
-#   7. The worker is launched there; the machine's own capacity and headroom
+#   7. The brief is re-rendered there with the filled Task section spliced in.
+#   8. The worker is launched there; the machine's own capacity and headroom
 #      declarations can defer it the same way.
 # Then the spawning home publishes window=remote:<id> with remote_kind=worker,
 # remote_machine=, remote_host=, remote_root=, remote_home=, remote_target=,
@@ -72,6 +84,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-remote-readiness-lib.sh"
 # shellcheck source=bin/fm-project-origin-lib.sh
 . "$SCRIPT_DIR/fm-project-origin-lib.sh"
+# shellcheck source=bin/fm-spawn-headroom-lib.sh
+. "$SCRIPT_DIR/fm-spawn-headroom-lib.sh"
 
 DEFER_EXIT=75
 die() { printf 'error: %s\n' "$1" >&2; exit "${2:-1}"; }
@@ -105,6 +119,20 @@ REG_LINE=$(grep -m 1 -E "^- $PROJ_NAME( \\[| - )" "$DATA/projects.md" 2>/dev/nul
 FORGE=-
 if [ "$KIND" = ship ]; then
   FORGE=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-project-mode.sh" --forge "$PROJ_NAME" 2>/dev/null) || FORGE=none
+fi
+
+MACHINE_HEADROOM="$CONFIG/spawn-headroom.$MACHINE"
+if [ -e "$MACHINE_HEADROOM" ] || [ -L "$MACHINE_HEADROOM" ]; then
+  HEADROOM_CHECK=$(mktemp -d "${TMPDIR:-/tmp}/fm-remote-headroom.XXXXXX") || die "cannot stage $MACHINE_HEADROOM for validation"
+  FM_SPAWN_HEADROOM_ERROR="it is not a readable regular file"
+  if ! { [ -f "$MACHINE_HEADROOM" ] && [ -r "$MACHINE_HEADROOM" ] && cp -- "$MACHINE_HEADROOM" "$HEADROOM_CHECK/spawn-headroom"; } \
+    || ! fm_spawn_headroom_lookup "$HEADROOM_CHECK"; then
+    rm -rf -- "$HEADROOM_CHECK"
+    die "spawn refused: machine $MACHINE's spawn headroom declaration $MACHINE_HEADROOM is unreadable (${FM_SPAWN_HEADROOM_ERROR#"$HEADROOM_CHECK/spawn-headroom "}); fix it so the captain's thresholds for that machine are known (docs/configuration.md \"Spawn headroom\")"
+  fi
+  rm -rf -- "$HEADROOM_CHECK"
+else
+  MACHINE_HEADROOM=
 fi
 
 BRIEF="$DATA/$ID/brief.md"
@@ -181,6 +209,38 @@ if head=$(primary_head_commit "$FM_ROOT"); then
 else
   echo "warning: machine $MACHINE code root sync skipped before launch: this home's default-branch commit cannot be resolved" >&2
 fi
+
+rc=0
+if [ -n "$MACHINE_HEADROOM" ]; then
+  out=$("$SCRIPT_DIR/fm-on.sh" --stdin --machine "$MACHINE" fm-remote-worker-control.sh admit "$ID" \
+    < "$MACHINE_HEADROOM" 2>&1) || rc=$?
+else
+  out=$(remote admit "$ID" 2>&1) || rc=$?
+fi
+case "$rc" in
+  0) ;;
+  255) unknown "the headroom admission" ;;
+  "$DEFER_EXIT")
+    printf 'deferred: %s on machine %s: %s; task %s was not launched and its backlog item stays queued - dispatch it again at the next queue re-evaluation\n' \
+      "$ID" "$MACHINE" "$(printf '%s\n' "$out" | sed -n 's/^deferred: //p' | tail -n 1)" "$ID"
+    exit "$DEFER_EXIT"
+    ;;
+  *)
+    printf '%s\n' "$out" >&2
+    case "$out" in
+      *'usage:'*|*'Usage:'*) die "machine $MACHINE could not run its spawn headroom admission; its code root may predate it - update it, then retry" ;;
+    esac
+    die "machine $MACHINE refused its spawn headroom admission (its reason is above)"
+    ;;
+esac
+if [ -z "$(printf '%s\n' "$out" | sed -n 's/^admit: //p')" ]; then
+  printf '%s\n' "$out" >&2
+  die "machine $MACHINE returned no headroom admission verdict; its code root may predate it - update it, then retry"
+fi
+if printf '%s\n' "$out" | grep -q '^headroom: none '; then
+  echo "warning: machine $MACHINE declares no spawn headroom, so task $ID is placed without measuring it and its heavy builds there are not gated; declare one in $CONFIG/spawn-headroom.$MACHINE (docs/configuration.md \"Spawn headroom\")" >&2
+fi
+printf '%s\n' "$out" | sed -n "s/^warning: \(.*\)\$/warning: spawn headroom on machine $MACHINE was not checked for task $ID, which is admitted without it: \1/p" >&2
 
 rc=0
 fm_remote_worker_install_account "$SCRIPT_DIR" "$CONFIG" "$MACHINE" || rc=$?

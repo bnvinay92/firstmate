@@ -27,7 +27,10 @@
 #
 # Declaration: config/spawn-headroom in the same config directory that
 # fm_project_capacity_config_dir resolves (the local root Firstmate home's), so
-# every home on this machine reads the same thresholds for the same machine.
+# every home on this machine reads the same thresholds for the same machine. A
+# worker machine's declaration is the worker-host home's config/spawn-headroom
+# there, provisioned from the spawning home's config/spawn-headroom.<machine-id>
+# (bin/fm-remote-worker-spawn.sh owns that placement step).
 # One `<key> <value>` setting per line; blank lines and lines whose first
 # non-blank character is `#` are ignored:
 #   min-ram <size>          defer while available memory is below <size>

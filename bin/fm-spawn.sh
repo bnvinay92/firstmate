@@ -210,7 +210,9 @@
 #   same `deferred:` line shape and exit 75, naming headroom-axi's verdict; a
 #   missing or failing headroom-axi admits the spawn with a `warning:` line
 #   naming the problem; an unreadable declaration refuses with exit 1. A
-#   relaunch and a --secondmate spawn are never measured.
+#   relaunch and a --secondmate spawn are never measured. A --machine spawn
+#   measures the worker machine there instead of this machine
+#   (bin/fm-remote-worker-spawn.sh).
 #   With no harness arg, a crewmate/scout spawn resolves the CREW harness only when
 #   config/crew-dispatch.json is absent. When that file exists, crewmate/scout
 #   spawns require an explicit harness so firstmate cannot silently skip dispatch

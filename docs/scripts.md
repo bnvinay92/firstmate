@@ -28,7 +28,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-remote-job-lib.sh`   | Shared bounded remote job queue, worker readiness, LaunchAgent contract, and filesystem-composed PATH |
 | `fm-remote-job-worker.sh` | Long-lived remote queue worker for tracked `fm-*.sh` commands in the account runtime |
 | `fm-remote-job-reap-orphans.sh` | Stop remote job workers left running by a pruned code root, never one whose checkout still exists |
-| `fm-remote-doctor.sh`    | Check, and with `--fix` repair, one remote account's secondmate readiness (remote job worker, Herdr, Aqua launch agents, PATH, and required tools) |
+| `fm-remote-doctor.sh`    | Check, and with `--fix` repair, one remote account's secondmate or worker-machine readiness (remote job worker, Herdr, Aqua launch agents, PATH, required tools, and on a worker machine headroom-axi) |
 | [`fm-backlog-handoff.sh`](../bin/fm-backlog-handoff.sh) | Move queued backlog items into a secondmate home; its header owns route-specific wake outcomes and retries |
 | `fm-backlog-receive.sh`  | Idempotently ingest one confined remote handoff outbox through tasks-axi             |
 | `fm-captain-hold.sh`     | Hold tasks for the captain, record the captain's answers, gate investigation completion, and report record divergence between the status log and the backlog |
@@ -60,7 +60,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-remote-readiness-lib.sh` | Shared remote readiness gate: check and, when needed, repair then re-check through `fm-remote-doctor.sh` |
 | `fm-worker-machine-lib.sh` | Parse `config/worker-machines`, the registry of machines an individual worker may be placed on |
 | `fm-remote-worker-spawn.sh` | Place one fresh ship or scout on a registered worker machine (reached through `fm-spawn.sh --machine`) |
-| `fm-remote-worker-control.sh` | Machine-side verbs for placed workers: sync, account, prepare, brief, launch, observe, send, control, retire |
+| `fm-remote-worker-control.sh` | Machine-side verbs for placed workers: sync, account, admit, prepare, brief, launch, observe, send, control, retire |
 | `fm-remote-worker-lib.sh` | Recognize a placed worker's record, route its remote verbs, and read the Claude login a placement carries |
 | [`fm-project-origin-lib.sh`](../bin/fm-project-origin-lib.sh) | Accepted origin-form owner shared by both remote provisioning boundaries |
 | `fm-spawn.sh`            | Spawn crewmates, scouts, `id=repo` batches, and secondmates on the resolved harness and runtime backend |
