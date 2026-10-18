@@ -11,6 +11,9 @@
 # keeps its queued backlog item and is dispatched again when a place frees.
 # Without a declaration nothing changes and dispatch stays uncapped
 # (AGENTS.md section 7).
+# Memory and disk load is bounded by spawn headroom instead
+# (bin/fm-spawn-headroom-lib.sh), because a per-project count cannot follow
+# load that every project shares.
 #
 # This file is the single owner of the declaration format, of what holds a
 # place, and of the admission verdict. docs/configuration.md "Project capacity"

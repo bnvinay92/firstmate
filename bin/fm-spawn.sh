@@ -198,6 +198,15 @@
 #   A batch reports such a pair as `batch: DEFERRED` and exits 75 when nothing
 #   else failed. A relaunch and a --secondmate spawn are never counted against
 #   capacity.
+#   Spawn headroom: when this machine opts in (config/spawn-headroom, read from
+#   the same root-home config; bin/fm-spawn-headroom-lib.sh owns the declaration
+#   and the verdict), a fresh ship or scout spawn first asks `headroom-axi check`
+#   whether memory and disk headroom and memory pressure admit another worker,
+#   before taking the project lock. A short machine defers the spawn with the
+#   same `deferred:` line shape and exit 75, naming headroom-axi's verdict; a
+#   missing or failing headroom-axi admits the spawn with a `warning:` line
+#   naming the problem; an unreadable declaration refuses with exit 1. A
+#   relaunch and a --secondmate spawn are never measured.
 #   With no harness arg, a crewmate/scout spawn resolves the CREW harness only when
 #   config/crew-dispatch.json is absent. When that file exists, crewmate/scout
 #   spawns require an explicit harness so firstmate cannot silently skip dispatch
@@ -704,6 +713,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-project-capacity-lib.sh
 . "$SCRIPT_DIR/fm-project-capacity-lib.sh"
+# shellcheck source=bin/fm-spawn-headroom-lib.sh
+. "$SCRIPT_DIR/fm-spawn-headroom-lib.sh"
 # shellcheck source=bin/fm-worker-account-lib.sh
 . "$SCRIPT_DIR/fm-worker-account-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
@@ -1634,7 +1645,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
     pair_rc=0
     FM_SPAWN_NO_GUARD=1 "$FM_ROOT/bin/fm-spawn.sh" "${pair_args[@]}" || pair_rc=$?
     if [ "$pair_rc" -eq "$FM_PROJECT_CAPACITY_DEFER_EXIT" ]; then
-      echo "batch: DEFERRED ${pair%%=*} (${pair#*=}) - its project is at capacity, so it stays queued" >&2
+      echo "batch: DEFERRED ${pair%%=*} (${pair#*=}) - its project is at capacity or this machine is short of headroom, so it stays queued" >&2
       [ "$rc" -ne 0 ] || rc=$FM_PROJECT_CAPACITY_DEFER_EXIT
     elif [ "$pair_rc" -ne 0 ]; then
       echo "batch: FAILED to spawn ${pair%%=*} (${pair#*=})" >&2
@@ -3214,6 +3225,25 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
   fi
   SPAWN_PROJECT_CAPACITY=$FM_PROJECT_CAPACITY
   SPAWN_PROJECT_CAPACITY_ANY=$FM_PROJECT_CAPACITY_ANY
+  # Headroom admission (bin/fm-spawn-headroom-lib.sh owns the declaration and
+  # the verdict): while this machine opts in and headroom-axi reports it short,
+  # the fresh worker is deferred exactly like a capacity deferral. It runs before
+  # the project lock is taken, so a slow measurement never holds that lock.
+  if ! fm_spawn_headroom_lookup "$SPAWN_CAPACITY_CONFIG"; then
+    echo "error: spawn refused: the spawn headroom declaration is unreadable ($FM_SPAWN_HEADROOM_ERROR); fix it so the captain's headroom thresholds are known (docs/configuration.md \"Spawn headroom\")" >&2
+    exit 1
+  fi
+  if [ -n "$FM_SPAWN_HEADROOM_ACTIVE" ]; then
+    SPAWN_HEADROOM_RC=0
+    fm_spawn_headroom_admit || SPAWN_HEADROOM_RC=$?
+    if [ "$SPAWN_HEADROOM_RC" -eq "$FM_SPAWN_HEADROOM_DEFER_EXIT" ]; then
+      echo "deferred: this machine is short of headroom for another worker ($FM_SPAWN_HEADROOM_FILE): $FM_SPAWN_HEADROOM_REASON; task $ID was not launched and its backlog item stays queued - dispatch it again at the next queue re-evaluation" >&2
+      exit "$FM_SPAWN_HEADROOM_DEFER_EXIT"
+    fi
+    if [ -n "$FM_SPAWN_HEADROOM_WARNING" ]; then
+      echo "warning: spawn headroom was not checked for task $ID, which is admitted without it: $FM_SPAWN_HEADROOM_WARNING; fix this so $FM_SPAWN_HEADROOM_FILE takes effect (docs/configuration.md \"Spawn headroom\")" >&2
+    fi
+  fi
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] &&
   { [ "$BACKEND" != orca ] || [ -n "$SPAWN_PROJECT_CAPACITY_ANY" ]; }; then
