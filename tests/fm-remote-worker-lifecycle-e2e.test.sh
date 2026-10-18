@@ -369,7 +369,7 @@ pass "interrupt and relaunch run on the machine and a relaunch republishes the r
 out=$(FM_FAKE_SSH_MODE=unreachable w_env "$ROOT/bin/fm-crew-state.sh" scout1)
 assert_contains "$out" "unknown-remote: machine pc unreachable" "an unreachable machine was not unknown"
 rc=0
-FM_FAKE_SSH_MODE=unreachable w_env "$ROOT/bin/fm-teardown.sh" scout1 > "$TMP_ROOT/td-unreach.out" 2>&1 || rc=$?
+FM_FAKE_SSH_MODE=unreachable w_env "$ROOT/bin/fm-teardown.sh" scout1 --force > "$TMP_ROOT/td-unreach.out" 2>&1 || rc=$?
 expect_code 255 "$rc" "cleanup while the machine is unreachable"
 assert_present "$META" "an unreachable cleanup removed this home's record"
 assert_present "$WHH/state/scout1.meta" "an unreachable cleanup removed the machine's record"
@@ -387,15 +387,25 @@ pass "an unreachable machine is unknown, reported once, and keeps every record"
 
 # --- cleanup ---------------------------------------------------------------
 
+# The captain-call completion gate is this home's: a scout with no inventory
+# refuses here before the machine is asked to clean anything up.
+rc=0
+w_env "$ROOT/bin/fm-teardown.sh" scout1 > "$TMP_ROOT/td-gate.out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail "a scout cleanup without its captain-call inventory succeeded"
+assert_grep 'captain-call completion gate' "$TMP_ROOT/td-gate.out" "the gate refusal was not named"
+assert_present "$WHH/state/scout1.meta" "the gate refusal still cleaned up on the machine"
+assert_no_grep 'teardown scout1' "$HOST_LOG" "the machine was asked to clean up before the gate passed"
+# The remaining legs are --force (the captain's explicit discard authority),
+# which skips that gate; tests/fm-teardown.test.sh owns the gate itself.
 touch "$TMP_ROOT/host-teardown.refuse"
 rc=0
-w_env "$ROOT/bin/fm-teardown.sh" scout1 > "$TMP_ROOT/td-refuse.out" 2>&1 || rc=$?
+w_env "$ROOT/bin/fm-teardown.sh" scout1 --force > "$TMP_ROOT/td-refuse.out" 2>&1 || rc=$?
 [ "$rc" -ne 0 ] || fail "a cleanup the machine refused was reported as done"
 assert_present "$META" "a refused cleanup removed this home's record"
 w_env "$ROOT/bin/fm-procevent.sh" list 2>/dev/null | grep -q "^$SID " \
   || fail "a refused cleanup did not re-arm the status mirror"
 rm -f "$TMP_ROOT/host-teardown.refuse" "$PARENT/data/scout1/report.md"
-w_env "$ROOT/bin/fm-teardown.sh" scout1 > "$TMP_ROOT/td.out" 2>&1 \
+w_env "$ROOT/bin/fm-teardown.sh" scout1 --force > "$TMP_ROOT/td.out" 2>&1 \
   || fail "cleaning up the placed scout failed: $(cat "$TMP_ROOT/td.out")"
 assert_grep 'teardown scout1 complete (machine pc' "$TMP_ROOT/td.out" "cleanup did not report the machine"
 assert_absent "$META" "cleanup left this home's record"
@@ -403,7 +413,8 @@ assert_absent "$WHH/state/scout1.meta" "cleanup left the machine's record"
 assert_grep 'alpha has one module.' "$PARENT/data/scout1/report.md" "cleanup did not copy the report back first"
 w_env "$ROOT/bin/fm-procevent.sh" list 2>/dev/null | grep -q "^$SID " \
   && fail "cleanup left the status mirror registered"
-pass "cleanup runs on the machine first, copies the report, and only then removes this home's record"
+assert_grep 'teardown scout1 --force' "$HOST_LOG" "the forced cleanup did not reach the machine's teardown"
+pass "cleanup gates here, runs on the machine, copies the report, and only then removes this home's record"
 
 # --- a direct-PR ship ---------------------------------------------------------
 

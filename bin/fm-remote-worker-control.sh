@@ -19,7 +19,7 @@
 #   fm-remote-worker-control.sh key <id> <key>
 #   fm-remote-worker-control.sh control <id> interrupt|exit
 #   fm-remote-worker-control.sh control <id> relaunch <harness> <model> <effort>   (stdin: progress note)
-#   fm-remote-worker-control.sh retire <id> [--force]
+#   fm-remote-worker-control.sh retire <id> [--force|--captain-gate-passed]
 # An argument shown as <mode>, <yolo>, <base-branch>, <forge>, <model>, or
 # <effort> takes `-` for "none"; <branch-prefix> is passed verbatim and may be
 # empty, exactly as bin/fm-brief.sh and bin/fm-spawn.sh accept it.
@@ -549,20 +549,24 @@ cmd_control() {
   host_env "$SCRIPT_DIR/fm-control.sh" "${args[@]}"
 }
 
+# A scout's captain-call completion gate is run by the supervising home, which
+# holds the captain's calls and its copy of the report, before it asks for this
+# cleanup; --captain-gate-passed records that, so the ordinary teardown here
+# skips only that gate (bin/fm-teardown.sh) and keeps every other check.
 cmd_retire() {
-  local id=$1 force=${2:-} meta
+  local id=$1 option=${2:-} meta
   validate_id "$id"
-  [ -z "$force" ] || [ "$force" = --force ] || usage
   meta=$(meta_path "$id")
   if [ ! -e "$meta" ] && [ ! -L "$meta" ]; then
     printf 'already-retired: %s\n' "$id"
     return 0
   fi
-  if [ -n "$force" ]; then
-    host_env "$SCRIPT_DIR/fm-teardown.sh" "$id" --force
-  else
-    host_env "$SCRIPT_DIR/fm-teardown.sh" "$id"
-  fi
+  case "$option" in
+    '') host_env "$SCRIPT_DIR/fm-teardown.sh" "$id" ;;
+    --force) host_env "$SCRIPT_DIR/fm-teardown.sh" "$id" --force ;;
+    --captain-gate-passed) host_env FM_TEARDOWN_CAPTAIN_GATE_VERIFIED=1 "$SCRIPT_DIR/fm-teardown.sh" "$id" ;;
+    *) usage ;;
+  esac
 }
 
 case "${1:-}" in

@@ -1126,7 +1126,7 @@ remote_secondmate_teardown_locked() {
 # because whether the machine finished is unknown.
 remote_worker_teardown() {
   local machine kind mode pr_url report rel data_relative out rc meta_spawn_gen lock marker tmp
-  local -a done_args flags
+  local -a done_args flags retire_args
   [ "$(fm_meta_get "$META" remote_kind)" = worker ] || return 3
   machine=$(fm_meta_get "$META" remote_machine)
   kind=$(fm_meta_get "$META" kind)
@@ -1153,6 +1153,20 @@ remote_worker_teardown() {
       fi
     fi
   fi
+  retire_args=("$ID")
+  if [ "$FORCE" = --force ]; then
+    retire_args+=(--force)
+  elif [ "$kind" = scout ]; then
+    # The captain-call completion gate belongs to this home, which holds the
+    # captain's calls and the copied report; the machine is told it passed.
+    if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
+        FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-captain-hold.sh" verify "$ID" >/dev/null; then
+      echo "REFUSED: scout task $ID has not passed the captain-call completion gate." >&2
+      echo "Inventory its report and any visual review through bin/fm-captain-hold.sh before teardown." >&2
+      return 1
+    fi
+    retire_args+=(--captain-gate-passed)
+  fi
   lock=$(secondmate_reply_lifecycle_lock_path "$STATE" "$ID")
   fm_lock_acquire_wait "$lock" || return 1
   REMOTE_REPLY_LIFECYCLE_LOCK=$lock
@@ -1162,11 +1176,7 @@ remote_worker_teardown() {
   fi
   "$FM_ROOT/bin/fm-guard.sh" || true
   rc=0
-  if [ "$FORCE" = --force ]; then
-    out=$("$SCRIPT_DIR/fm-on.sh" --machine "$machine" fm-remote-worker-control.sh retire "$ID" --force < /dev/null 2>&1) || rc=$?
-  else
-    out=$("$SCRIPT_DIR/fm-on.sh" --machine "$machine" fm-remote-worker-control.sh retire "$ID" < /dev/null 2>&1) || rc=$?
-  fi
+  out=$("$SCRIPT_DIR/fm-on.sh" --machine "$machine" fm-remote-worker-control.sh retire "${retire_args[@]}" < /dev/null 2>&1) || rc=$?
   if [ "$rc" -ne 0 ] && [ "$rc" -ne "$TEARDOWN_LOST_SLOT_EXIT" ]; then
     [ -z "$out" ] || printf '%s\n' "$out" >&2
     if [ "$rc" -eq 255 ]; then
@@ -3419,7 +3429,13 @@ if [ "$KIND" = scout ] && [ "$FORCE" != "--force" ]; then
     echo "The report is the work product. Have the crewmate write it, or use --force after explicit discard approval." >&2
     exit 1
   fi
-  if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
+  # A scout placed on a worker machine is inventoried in the home that
+  # supervises it, which runs this same gate against its own copy of the report
+  # before it asks the machine to clean up (remote_worker_teardown above); the
+  # machine-side run therefore carries FM_TEARDOWN_CAPTAIN_GATE_VERIFIED=1 from
+  # bin/fm-remote-worker-control.sh instead of re-asking a home that never held
+  # the captain's calls.
+  if [ "${FM_TEARDOWN_CAPTAIN_GATE_VERIFIED:-0}" != 1 ] && ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
       FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-captain-hold.sh" verify "$ID" >/dev/null; then
     echo "REFUSED: scout task $ID has not passed the captain-call completion gate." >&2
     echo "Inventory its report and any visual review through bin/fm-captain-hold.sh before teardown." >&2
