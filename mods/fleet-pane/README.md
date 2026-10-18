@@ -6,7 +6,9 @@ A Claude Code mod that keeps a live pane in the main Firstmate session listing e
 ## What it shows
 
 - **Open pull requests:** every task in this home whose record carries a GitHub pull request that is still open, one entry each with its project and title, its full URL, a check summary (passing, failing, running, or none reported), and what keeps it from merging: still a draft, a merge conflict, failing or running checks, changes requested, an approving review needed, behind its base branch, another task it waits on, or ready and waiting for the captain's word.
-  When the repository marks some checks required, only those block; the check summary still counts every check.
+  When the base branch's rulesets or protection mark some checks required, only those block, including a required check that has not reported on the pull request yet; the check summary still counts every check.
+  When no check is required, or GitHub does not answer for the base branch's rules, every failing or running check blocks.
+  A pull request GitHub itself reports blocked is never shown ready.
   A merged or closed pull request drops off.
 - **Decisions waiting for you:** every still-open decision in this home's task records, the same set the supervision drain lists, including the captain holds a second mate relays, plus every backlog item held for the captain that is due now.
   Each shows its task, a short summary, and the report it names when it has one.
