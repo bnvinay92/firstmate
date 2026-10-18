@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # fm-spawn-headroom-lib.sh - whether this machine has the memory and disk
-# headroom to admit one more fresh worker spawn, measured by headroom-axi.
+# headroom to admit one more fresh worker spawn, or to let a running worker
+# start heavy local work, measured by headroom-axi.
 #
 # A worker's memory and disk load - its build, its Gradle or Kotlin daemon, its
 # simulator - lands on the whole machine rather than on one project, and a
@@ -12,11 +13,15 @@
 # queued backlog item and is dispatched again at Firstmate's ordinary queue
 # re-evaluation (after a cleanup and at every heartbeat, AGENTS.md section 10);
 # nothing here polls, so a short machine is measured once per attempt and never
-# in a loop. Without the opt-in nothing changes.
+# in a loop. A worker that is already running reaches the same verdict through
+# bin/fm-headroom-gate.sh before it starts a heavy build, test suite, or
+# emulator, and declares a paused wait while the machine is short; that script
+# owns the worker-side wait. Without the opt-in nothing changes.
 #
-# This file is the single owner of the declaration format and the admission
-# verdict. docs/configuration.md "Spawn headroom" is the operator reference, and
-# bin/fm-spawn.sh owns where the check runs. bin/fm-project-capacity-lib.sh
+# This file is the single owner of the declaration format and the headroom
+# verdict. docs/configuration.md "Spawn headroom" is the operator reference,
+# bin/fm-spawn.sh owns where spawn admission runs, and bin/fm-headroom-gate.sh
+# owns the running worker's check and wait. bin/fm-project-capacity-lib.sh
 # remains the owner of per-project worker counts, which still suit a resource
 # that is not memory or disk, such as a device.
 #
@@ -29,10 +34,15 @@
 #   min-disk <size>         defer while free disk on the data volume is below <size>
 #   pressure warn|critical  defer while the kernel's memory pressure is at or
 #                           above this level, whatever available memory says
+#   max-wait <minutes>      how long a running worker waits for headroom
+#                           before it starts its heavy work anyway (default
+#                           FM_SPAWN_HEADROOM_MAX_WAIT_DEFAULT); spawn admission
+#                           never reads it
 # <size> is a positive number with an optional fraction and a K, M, G, or T unit
 # (4G, 512M, 1.5G), the form `headroom-axi check` takes. At least one of min-ram
 # and min-disk is required, because that is what headroom-axi checks; pressure
-# is optional, and without it pressure alone never defers. An unknown key, a key
+# is optional, and without it pressure alone never defers. max-wait is a
+# positive integer of at most four digits. An unknown key, a key
 # given twice, a malformed value, a declaration with neither minimum, or an
 # unreadable file makes the whole declaration unreadable, and bin/fm-spawn.sh
 # then refuses every fresh ship or scout spawn from this machine's homes until
@@ -67,11 +77,15 @@
 # shellcheck disable=SC2034 # read by bin/fm-spawn.sh after sourcing.
 FM_SPAWN_HEADROOM_DEFER_EXIT=75
 
+# Minutes a running worker waits for headroom when max-wait is not declared.
+FM_SPAWN_HEADROOM_MAX_WAIT_DEFAULT=30
+
 # Read this machine's headroom declaration.
 # Sets FM_SPAWN_HEADROOM_FILE to the declaration path, FM_SPAWN_HEADROOM_ACTIVE
 # to 1 when the machine opts in (empty otherwise), and FM_SPAWN_HEADROOM_MIN_RAM,
 # FM_SPAWN_HEADROOM_MIN_DISK, and FM_SPAWN_HEADROOM_PRESSURE to the declared
-# values, each empty when not declared. Returns 1 with
+# values, each empty when not declared, and FM_SPAWN_HEADROOM_MAX_WAIT to the
+# declared max-wait minutes or the default. Returns 1 with
 # FM_SPAWN_HEADROOM_ERROR when the declaration is unreadable.
 fm_spawn_headroom_lookup() {  # <config-dir>
   local line lineno=0 key value rest previous
@@ -80,6 +94,7 @@ fm_spawn_headroom_lookup() {  # <config-dir>
   FM_SPAWN_HEADROOM_MIN_RAM=
   FM_SPAWN_HEADROOM_MIN_DISK=
   FM_SPAWN_HEADROOM_PRESSURE=
+  FM_SPAWN_HEADROOM_MAX_WAIT=
   FM_SPAWN_HEADROOM_ERROR=
   if [ ! -e "$FM_SPAWN_HEADROOM_FILE" ] && [ ! -L "$FM_SPAWN_HEADROOM_FILE" ]; then
     return 0
@@ -119,6 +134,18 @@ fm_spawn_headroom_lookup() {  # <config-dir>
             ;;
         esac
         ;;
+      max-wait)
+        case "$value" in
+          '' | *[!0-9]* | 0*)
+            FM_SPAWN_HEADROOM_ERROR="$FM_SPAWN_HEADROOM_FILE line $lineno gives max-wait a number of minutes that is not a positive integer"
+            return 1
+            ;;
+        esac
+        if [ "${#value}" -gt 4 ]; then
+          FM_SPAWN_HEADROOM_ERROR="$FM_SPAWN_HEADROOM_FILE line $lineno gives max-wait more than four digits"
+          return 1
+        fi
+        ;;
       *)
         FM_SPAWN_HEADROOM_ERROR="$FM_SPAWN_HEADROOM_FILE line $lineno names unknown setting $key"
         return 1
@@ -128,6 +155,7 @@ fm_spawn_headroom_lookup() {  # <config-dir>
       min-ram) previous=$FM_SPAWN_HEADROOM_MIN_RAM ;;
       min-disk) previous=$FM_SPAWN_HEADROOM_MIN_DISK ;;
       pressure) previous=$FM_SPAWN_HEADROOM_PRESSURE ;;
+      max-wait) previous=$FM_SPAWN_HEADROOM_MAX_WAIT ;;
     esac
     if [ -n "$previous" ]; then
       FM_SPAWN_HEADROOM_ERROR="$FM_SPAWN_HEADROOM_FILE line $lineno gives $key a second time"
@@ -137,13 +165,16 @@ fm_spawn_headroom_lookup() {  # <config-dir>
       min-ram) FM_SPAWN_HEADROOM_MIN_RAM=$value ;;
       min-disk) FM_SPAWN_HEADROOM_MIN_DISK=$value ;;
       pressure) FM_SPAWN_HEADROOM_PRESSURE=$value ;;
+      max-wait) FM_SPAWN_HEADROOM_MAX_WAIT=$value ;;
     esac
   done < "$FM_SPAWN_HEADROOM_FILE"
   if [ -z "$FM_SPAWN_HEADROOM_MIN_RAM" ] && [ -z "$FM_SPAWN_HEADROOM_MIN_DISK" ]; then
     FM_SPAWN_HEADROOM_ERROR="$FM_SPAWN_HEADROOM_FILE declares neither min-ram nor min-disk"
     FM_SPAWN_HEADROOM_PRESSURE=
+    FM_SPAWN_HEADROOM_MAX_WAIT=
     return 1
   fi
+  [ -n "$FM_SPAWN_HEADROOM_MAX_WAIT" ] || FM_SPAWN_HEADROOM_MAX_WAIT=$FM_SPAWN_HEADROOM_MAX_WAIT_DEFAULT
   FM_SPAWN_HEADROOM_ACTIVE=1
   return 0
 }
@@ -173,8 +204,9 @@ fm_spawn_headroom_pressure_rank() {  # <level>
   esac
 }
 
-# Ask headroom-axi whether one more worker fits the declared thresholds
-# (fm_spawn_headroom_lookup must have succeeded with the machine opted in).
+# Ask headroom-axi whether one more worker, or one more heavy job, fits the
+# declared thresholds (fm_spawn_headroom_lookup must have succeeded with the
+# machine opted in).
 # Returns 0 to admit, or FM_SPAWN_HEADROOM_DEFER_EXIT to defer with
 # FM_SPAWN_HEADROOM_REASON naming headroom-axi's verdict. On an admit,
 # FM_SPAWN_HEADROOM_WARNING is empty when the measurement succeeded and

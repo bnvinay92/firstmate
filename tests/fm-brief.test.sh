@@ -1172,6 +1172,43 @@ test_wait_no_turns_absent_keeps_the_previous_brief() {
   pass "fm-brief: without config/wait-no-turns the brief and drive text stay as they were"
 }
 
+# When the machine declares spawn headroom, ship and scout briefs teach the
+# worker to gate heavy local work through bin/fm-headroom-gate.sh; without it,
+# and in a secondmate charter, the brief carries no such section.
+test_spawn_headroom_declaration_adds_the_gate_section() {
+  local home kind id brief gate
+  home="$TMP_ROOT/headroom-home"
+  mkdir -p "$home/data" "$home/config"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-headroom-off some-proj --mode direct-PR >/dev/null 2>&1 \
+    || fail "fm-brief.sh ship scaffold exited non-zero without a headroom declaration"
+  assert_no_grep "# Machine headroom" "$home/data/brief-headroom-off/brief.md" \
+    "a brief carried the headroom gate without a declaration"
+  printf '%s\n' "min-ram 4G" > "$home/config/spawn-headroom"
+  gate="FM_HOME='$home' '$ROOT/bin/fm-headroom-gate.sh'"
+  for kind in ship scout; do
+    id="brief-headroom-$kind"
+    if [ "$kind" = scout ]; then
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --scout >/dev/null 2>&1
+    else
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode no-mistakes >/dev/null 2>&1
+    fi
+    brief="$home/data/$id/brief.md"
+    assert_grep "# Machine headroom" "$brief" "$kind brief did not carry the headroom gate section"
+    assert_grep "run \`$gate\`; it prints one line." "$brief" "$kind brief did not name this home's gate command"
+    assert_grep "then run \`$gate --wait <seconds> --since <that epoch>\` as one blocking command" "$brief" \
+      "$kind brief did not teach the bounded wait"
+    assert_grep "append \`paused [at=<epoch>]: {the work} waits for headroom" "$brief" \
+      "$kind brief did not declare the headroom wait as paused"
+    assert_grep "Never stop or interrupt work that is already running because of this check" "$brief" \
+      "$kind brief did not protect running work"
+  done
+  FM_SECONDMATE_CHARTER="charter" FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-headroom-mate --secondmate some-proj >/dev/null 2>&1 \
+    || fail "fm-brief.sh secondmate scaffold exited non-zero"
+  assert_no_grep "# Machine headroom" "$home/data/brief-headroom-mate/brief.md" \
+    "a secondmate charter carried the worker headroom gate"
+  pass "fm-brief: a headroom declaration adds the heavy-work gate to ship and scout briefs only"
+}
+
 test_worker_role_scope() {
   local kind home brief
   home="$TMP_ROOT/worker-role"
@@ -1571,6 +1608,7 @@ test_scout_and_secondmate_scaffold
 test_scout_lavish_line_follows_presentation_floor
 test_workers_wait_without_spending_turns
 test_wait_no_turns_absent_keeps_the_previous_brief
+test_spawn_headroom_declaration_adds_the_gate_section
 test_home_brief_include_is_appended_last
 test_base_branch_is_rendered_and_bounded
 test_ship_branch_prefix_defaults_to_legacy_fm

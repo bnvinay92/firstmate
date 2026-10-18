@@ -218,7 +218,7 @@ test_ok_verdict_admits_the_worker() {
   local case_dir home out rc=0
   case_dir=$(make_case ok task-c)
   home="$case_dir/home"
-  declare_headroom "$home" "# heavy Gradle builds" "min-ram 4G" "  min-disk 30G" "" "pressure critical"
+  declare_headroom "$home" "# heavy Gradle builds" "min-ram 4G" "  min-disk 30G" "" "pressure critical" "max-wait 45"
   out=$(spawn_ship "$case_dir" task-c ok-warn) || rc=$?
   assert_admitted "$home" task-c "$rc" "$out" "ok verdict"
   assert_not_contains "$out" "warning: spawn headroom" "a measured ok verdict warned"
@@ -342,6 +342,10 @@ unknown key|min-ram 4G\nmax-ram 8G\n
 missing value|min-ram\n
 trailing text|min-ram 4G # leave room\n
 named twice|min-ram 4G\nmin-ram 6G\n
+zero max-wait|min-ram 4G\nmax-wait 0\n
+non-numeric max-wait|min-ram 4G\nmax-wait soon\n
+long max-wait|min-ram 4G\nmax-wait 10000\n
+max-wait twice|min-ram 4G\nmax-wait 5\nmax-wait 6\n
 ROWS
   assert_equals "" "$(cat "$case_dir/headroom.log")" "headroom-axi was asked under an unreadable declaration"
   rm -f "$home/config/spawn-headroom"
