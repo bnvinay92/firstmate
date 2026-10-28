@@ -2,10 +2,10 @@
 # Shared .env-style file accessor.
 # Usage: . bin/fm-env-lib.sh
 #
-# This file is the single owner of the one-key .env read: the optional
-# typesafe.ai dispatch key (bin/fm-dispatch-resolve.sh and bin/fm-bootstrap.sh)
-# resolves its value through fmx_env_get, so opt-in secrets in $FM_HOME/.env
-# are parsed by one rule. The value is printed to the caller's command
+# This file is the single owner of the one-key .env read: dispatch provider
+# settings and optional typesafe.ai or OpenRouter dispatch keys
+# (bin/fm-dispatch-resolve.sh) resolve through fmx_env_get, so $FM_HOME/.env
+# uses one parsing rule. The value is printed to the caller's command
 # substitution only; nothing is logged.
 
 # fmx_env_get <key> <file>
