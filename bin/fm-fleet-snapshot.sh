@@ -68,6 +68,8 @@
 #     endpoint.agent_alive is populated for local secondmates only, where it is
 #     useful return-channel supervision data; remote secondmates use "unknown"
 #     without a probe, and other tasks use "not_checked".
+#     pr.urls carries every distinct GitHub PR URL recorded in captured metadata
+#     and status history; pr.url keeps the legacy primary-PR selection.
 #   scout_reports[]: present data/<id>/report.md pointers.
 #   main_inventory: {valid,reason,orphan_in_flight[],unstructured_current_count} -
 #     main-home current-inventory checks shared with secondmate_home_summary_json
@@ -383,6 +385,11 @@ first_pr_url_in_file() {  # <file>
   grep -Eo 'https?://[^[:space:])"]+/pull/[0-9]+' "$1" 2>/dev/null | head -1
 }
 
+# All task-recorded PRs, without forge reads or report-body inference.
+pr_urls_in_files() {
+  jq -R -s '[scan("https://github\\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/pull/[0-9]+") ] | unique' "$@"
+}
+
 backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
   local backlog=${1:-$BACKLOG}
   if [ ! -f "$backlog" ]; then
@@ -542,6 +549,8 @@ backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
                   then null
                   else cap(.body_lines[-1]; "^(?<v>local main)$")
                   end))
+          | .links = ((.links + links(.body_lines | join(" "))) | unique)
+          | .pr_url = (.pr_url // (.links | map(select(test("/pull/[0-9]+"))) | .[0]))
           | .body_excerpt = ((.body_lines | join(" "))[:240])
         else . end)
     | .records as $records
@@ -754,7 +763,7 @@ task_json_lines() {
   local remote_host remote_root remote_machine current_file endpoint_file observation_line index=0
   local pr pr_source event_json current_json endpoint_exists agent_alive meta_json status_json report_json worktree_json home_json
   local last_event_raw current_state current_source pending_decision blocked_event report_present=0 pr_from_status
-  local open_decisions_tsv open_decisions_json
+  local open_decisions_tsv open_decisions_json pr_urls
 
   while [ "$index" -lt "$SNAPSHOT_TASK_META_COUNT" ]; do
     meta=${SNAPSHOT_TASK_METAS[index]}
@@ -785,6 +794,7 @@ task_json_lines() {
     fi
     status_log="$SNAPSHOT_TASK_DIR/$id.status"
     report_path="$SNAPSHOT_TASK_DIR/$id.report"
+    pr_urls=$(pr_urls_in_files "$meta" "$status_log") || return 1
     pr=$(meta_value "$meta" pr)
     pr_source=meta
     if [ -z "$pr" ]; then
@@ -886,6 +896,7 @@ task_json_lines() {
       --arg remote_host "$remote_host" \
       --arg remote_root "$remote_root" \
       --arg remote_machine "$remote_machine" \
+      --argjson pr_urls "$pr_urls" \
       --arg pr "$pr" \
       --arg pr_source "$pr_source" \
       --arg pr_head "$(meta_value "$meta" pr_head)" \
@@ -930,7 +941,7 @@ task_json_lines() {
                   elif $agent_alive == "alive" or $agent_alive == "dead" then $agent_alive
                   else "unknown" end),
           observed_at:$observed_at,freshness:"fresh"},
-        pr:{url:($pr | if . == "" then null else . end),source:$pr_source,head:($pr_head | if . == "" then null else . end)},
+        pr:{urls:$pr_urls,url:($pr | if . == "" then null else . end),source:$pr_source,head:($pr_head | if . == "" then null else . end)},
         hints:{
           pending_decision:$pending_decision,
           blocked_event:$blocked_event,

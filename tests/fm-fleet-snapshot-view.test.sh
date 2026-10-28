@@ -96,7 +96,9 @@ EOF
     "mode=ship" \
     "yolo=off" \
     "pr=https://github.com/kunchenguid/firstmate/pull/9"
-  printf 'needs-decision: choose an API shape\n' > "$home/state/ship-task.status"
+  printf '%s\n' 'needs-decision: choose an API shape' \
+    'working: stack https://github.com/kunchenguid/firstmate/pull/10 and https://github.com/kunchenguid/firstmate/pull/11#discussion_r1' \
+    'paused: duplicate https://github.com/kunchenguid/firstmate/pull/10' > "$home/state/ship-task.status"
   # A working ship task proves it through its own semantic busy-state record
   # (bin/fm-busy-lib.sh), which is what the snapshot's current-state read
   # consults; rendered pane text is no longer a state source.
@@ -166,6 +168,7 @@ test_fixture_snapshot_json() {
     | .current_state.state == "working"
       and .current_state.source == "pane"
       and .pr.url == "https://github.com/kunchenguid/firstmate/pull/9"
+      and .pr.urls == ["https://github.com/kunchenguid/firstmate/pull/10", "https://github.com/kunchenguid/firstmate/pull/11", "https://github.com/kunchenguid/firstmate/pull/9"]
       and .backlog.body_excerpt == "Preserve this detail for bearings."
       and .hints.pending_decision == false
       and .paths.status_log.kind == "event_history"

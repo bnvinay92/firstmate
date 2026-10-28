@@ -1,6 +1,6 @@
 {
   "name": "fleet-pane",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A live pane in the main Firstmate session listing every open pull request with its checks and what blocks it, and every decision waiting on the captain.",
   "author": { "name": "Firstmate contributors" },
   "types": "./types/index.d.ts"

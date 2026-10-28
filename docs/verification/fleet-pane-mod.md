@@ -2,65 +2,54 @@
 
 Audience: maintainer verification.
 
-This record supports the active guarantee that the [fleet-pane mod](../../mods/fleet-pane/README.md) draws a real Firstmate home's open pull requests and open decisions in a Claude Code pane without writing anything.
-[`bin/fm-fleet-snapshot.sh`](../../bin/fm-fleet-snapshot.sh) owns the records the pane reads.
+This record supports the current inventory and compact-label guarantees of the [fleet-pane mod](../../mods/fleet-pane/README.md).
+[`bin/fm-fleet-snapshot.sh`](../../bin/fm-fleet-snapshot.sh) owns the snapshot contract.
 
-## The pane against a live home
+## Live inventory projection
 
-This check ran on 2026-10-16 with Claude Code 2.1.301, loading this repository's `mods/fleet-pane` with `--plugin-dir` into an interactive session on a private tmux socket, 200 columns wide.
-The session ran in an empty scratch folder with `FM_HOME` naming a live main Firstmate home, so the mod found the home through `FM_HOME` and the snapshot script through the home's own code root:
+On 2026-10-28, the read-only snapshot and exported row builder were exercised against a live main home, using Node 23.11.0 and fleet-pane 0.2.0 source.
+The installed interactive host was version 2.1.312; this check did not launch an interactive session or establish a new rendering verdict for that version.
+The commands were:
 
 ```sh
-tmux -L <socket> new-session -d -s live -x 200 -y 60 \
-  "cd <scratch> && FM_HOME=<home> claude --plugin-dir <checkout>/mods/fleet-pane"
+FM_HOME=<home> FM_CREW_STATE_NO_FORGE=1 \
+  FM_SNAPSHOT_CACHE_DIR=/dev/null/fleet-pane \
+  bash bin/fm-fleet-snapshot.sh --json > <scratch>/snapshot.json
+node --experimental-strip-types --input-type=module -e '
+  import { readFileSync } from "node:fs";
+  import { parseSnapshot } from "./mods/fleet-pane/hooks/lib.ts";
+  console.log(JSON.stringify(parseSnapshot(readFileSync(process.argv[1], "utf8"))));
+' <scratch>/snapshot.json
 ```
 
-After the folder-trust prompt, and with no prompt typed, the pane opened by itself beside the transcript and filled within about 25 seconds.
-Observed in the terminal, with rows for private repositories and decision summaries elided:
+The previous projection produced 11 PR candidates and 21 decision rows.
+The expanded projection recovered ten still-open PRs from one task's status history and two decisions present only in the structured secondmate summary.
+The named approval PRs were already present in the previous snapshot, so their reported absence was not an inventory omission in that projection.
+Eight previous decision summaries exceeded 200 characters; the longest was 977 characters.
+The current projection uses the structured hold title or decision key instead of those paragraphs, and caps titles at 100 characters.
+Exact private records, the full before/after inventories, and forge observations belong in the task's private report.
 
-```text
-Open pull requests (8)
-  ...
-  firstmate: feat(stow-review): one stow button per home and a readable review pane
-    https://github.com/bnvinay92/firstmate/pull/11
-    checks 16 running - checks still running
-  ...
+## Repeatable regression checks
 
-Decisions waiting for you (12)
-  <second mate> · <hold name>: <summary, wrapped under its row at the pane's
-    width>
-    report data/<report folder>/report.md
-  ...
+CI runs the portable row checks with Node 22:
 
-Updated 00:50, every minute and after each reply.
+```sh
+node --experimental-strip-types --test mods/fleet-pane/tests/rows.test.mjs
 ```
 
-The eight pull requests matched the home's task records with an open pull request, each with its full URL and a blocker: two ready and waiting for the merge word, one still a draft, one behind its base branch, the rest needing an approving review or with checks still running.
-The twelve decisions matched the home's open decisions: nine captain holds relayed by a second mate, one worker's open question, and two backlog items held for the captain.
-The home's `state/secondmate-summary-cache` folder was still empty after the session, as before it, confirming the snapshot run wrote no cache copy.
+They cover multi-PR tasks, backlog-only PRs and body links, URL deduplication, legacy snapshots, structured secondmate holds and keyed relays, unavailable summaries, due-now holds, title selection, and ellipsis handling.
+The existing `tests/fm-fleet-snapshot-view.test.sh` fixture also verifies that `pr.urls` contains every recorded metadata/status PR while `pr.url` retains the primary URL.
+Its existing stock Bash CI lane remains applicable.
 
-## Wrapping at the captain's pane width
+The interactive host's rendering and refresh checks remain available through:
 
-This check ran on 2026-10-16 with Claude Code 2.1.301, the same way, in a 200-column terminal, where the pane docked about 70 columns wide, the width at which the captain saw lines cut off.
-Long titles, status lines, and decision summaries wrapped onto lines indented under their row; the widest drawn pane line was 72 cells including the frame's close mark, none ran past the right edge, and every URL and blocker showed whole:
-
-```text
-  axi: [MOP-1337] Drop the galileo-axi root shim: one package and one
-    install path per tool
-    https://github.com/careem/axi/pull/7
-    checks 2 failing - needs an approving review
-  ...
-  service-directory: [MOP-1337] Rename the galileo-axi entry to axi
-    after the repository rename
-    https://github.com/careem/service-directory/pull/4970
-    checks passing - needs an approving review; behind its base branch
-  ...
-  inspector-lavish-ship: Ship the Lavish review page for KSM
-    recordings?
+```sh
+claude plugin validate mods/fleet-pane
+claude plugin test mods/fleet-pane
 ```
 
-Shrinking the terminal to 160 columns kept the pane within its width.
-`claude plugin test mods/fleet-pane` renders the pane at 70 and 34 columns and asserts no line is wider, and that URLs, blockers, and reports survive whole.
-
-Dark and light theme readability, the pane's colours, closing and reopening, merged pull requests dropping off, and the GitHub call budget are covered by `claude plugin test mods/fleet-pane`, which drives the pane through the engine's test kit on the terminal and desktop surfaces.
-Re-run this check after a Claude Code upgrade before relying on this record for a newer build.
+The rendering suite now asserts one line per item at 70 and 34 columns, whole hyperlink targets after resizing, and short decision titles.
+It also covers read-only snapshot flags, the batched GitHub query budget, merged PR removal, theme colours, persisted closing, and refresh after `/clear`.
+Local tests were not run for the 2026-10-28 change because the operating home's policy delegates test execution to CI.
+The earlier 2026-10-16 interactive observation established automatic pane opening and refresh with version 2.1.301; its multiline layout is superseded by the current single-line contract and is not evidence for the new rendering.
+Re-run the interactive commands after a host upgrade before relying on the rendering contract for a newer build.

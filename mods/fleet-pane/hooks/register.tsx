@@ -13,8 +13,9 @@ import {
   parsePrStatuses,
   parseSnapshot,
   prQuery,
+  prStateQuery,
   prRow,
-  wrapSpans,
+  shortLine,
 } from './lib'
 import type { PrRef, PrStatus } from './lib'
 
@@ -31,9 +32,6 @@ const LINK = 'suggestion'
 const WAIT = 'warning'
 const READY = 'success'
 const BACKGROUND = 'composerSidebarBackground'
-
-// A run of one line's text in one style.
-type Run = { text: string; color: string; bold?: boolean }
 
 // The pane's width when a surface hands none, as at its narrowest seat.
 const FALLBACK_COLUMNS = 40
@@ -77,11 +75,18 @@ let isReading = false
 
 async function askGithub($: Engine, refs: PrRef[], now: number): Promise<string | null> {
   if (!isGithubDue(refs, asked, now)) return null
-  const ran = await $.process.run(['gh', 'api', 'graphql', '-f', `query=${prQuery(refs)}`], { timeoutMs: 20_000 })
-  const found = parsePrStatuses(ran.stdout, refs)
+  const states = await $.process.run(['gh', 'api', 'graphql', '-f', `query=${prStateQuery(refs)}`], { timeoutMs: 20_000 })
+  const known = parsePrStatuses(states.stdout, refs)
+  const open = refs.filter(ref => known[ref.url]?.state === 'OPEN')
+  const closed = Object.fromEntries(Object.entries(known).filter(([, status]) => status.state !== 'OPEN'))
+  let found: Record<string, PrStatus> = {}
+  if (open.length > 0) {
+    const ran = await $.process.run(['gh', 'api', 'graphql', '-f', `query=${prQuery(open)}`], { timeoutMs: 20_000 })
+    found = parsePrStatuses(ran.stdout, open)
+  }
   asked = { urls: refs.map(ref => ref.url).join(' '), at: now }
-  statuses = found
-  return Object.keys(found).length === 0 && ran.exitCode !== 0 ? 'GitHub could not be read just now.' : null
+  statuses = { ...closed, ...found }
+  return Object.keys(statuses).length < refs.length ? 'Some GitHub statuses could not be read just now.' : null
 }
 
 // Reread the snapshot and, when due, GitHub, then redraw. One read at a time;
@@ -177,72 +182,41 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Text, Link } = $.ui.resolve(e)
     const shown = await read($, view)
     const pane = (...children: RenderChildren[]) => (
       <Box flexDirection="column" backgroundColor={BACKGROUND}>
         {children}
       </Box>
     )
-    // One row's runs wrapped to the pane's width, each continuation indented
-    // two cells under its row, so no line runs past the right edge.
+    // One physical line per item. Link targets remain whole when the visible
+    // label is ellipsized, including local report paths on the terminal.
     const width = e.props.bodyColumns > 0 ? e.props.bodyColumns : FALLBACK_COLUMNS
-    const row = (key: string, indent: number, runs: Run[]) => {
-      const text = runs.map(run => run.text).join('')
-      return wrapSpans(text, width - indent, width - indent - 2).map(([from, to], line) => {
-        let at = 0
-        const parts = runs.flatMap((run, i) => {
-          const start = Math.max(from, at)
-          const end = Math.min(to, at + run.text.length)
-          at += run.text.length
-          return end > start ? [<Text key={i} color={run.color} bold={run.bold}>{text.slice(start, end)}</Text>] : []
-        })
-        return (
-          <Text key={`${key}:${line}`} color={TEXT} wrap="truncate-end">
-            {' '.repeat(line === 0 ? indent : indent + 2)}
-            {parts}
-          </Text>
-        )
-      })
+    const row = (key: string, label: string, href: string | null = null, color = TEXT, bold = false) => {
+      const title = shortLine(label, Math.max(1, width - 2))
+      const target = href?.startsWith('/') ? `file://${encodeURI(href)}` : href?.startsWith('data/') && site !== null ? `file://${encodeURI(`${site.home}/${href}`)}` : href
+      return (
+        <Text key={key} color={color} bold={bold} wrap="truncate-end">
+          {'  '}{target === null ? title : <Link href={target}>{title}</Link>}
+        </Text>
+      )
     }
+
     if (shown.at === null) {
-      return pane(row('wait', 0, [{ text: shown.problem ?? 'Reading pull requests and decisions...', color: TEXT }]))
+      return pane(row('wait', shown.problem ?? 'Reading pull requests and decisions...'))
     }
     return pane(
-      row('prs', 0, [{ text: `Open pull requests (${shown.prs.length})`, color: TEXT, bold: true }]),
+      row('prs', `Open pull requests (${shown.prs.length})`, null, TEXT, true),
       shown.prs.length === 0
-        ? row('no-prs', 2, [{ text: 'None open.', color: TEXT }])
-        : shown.prs.map(pr => (
-            <Box key={`pr:${pr.url}`} flexDirection="column">
-              {row('title', 2, [{ text: `${pr.project}: ${pr.title}`, color: TEXT }])}
-              {row('url', 4, [{ text: pr.url, color: LINK }])}
-              {row('checks', 4, [
-                { text: `checks ${pr.checks} - `, color: TEXT },
-                { text: pr.blockers.join('; '), color: pr.blockers[0]?.startsWith('ready') === true ? READY : WAIT },
-              ])}
-            </Box>
-          )),
-      <Text key="gap" color={TEXT}>
-        {' '}
-      </Text>,
-      row('decisions', 0, [{ text: `Decisions waiting for you (${shown.decisions.length})`, color: TEXT, bold: true }]),
+        ? row('no-prs', 'None open.')
+        : shown.prs.map(pr => row(`pr:${pr.url}`, `${pr.project}: ${pr.title} · ${pr.checks} · ${pr.blockers.join('; ')}`, pr.url,
+            pr.blockers[0]?.startsWith('ready') === true ? READY : WAIT)),
+      row('decisions', `Decisions waiting for you (${shown.decisions.length})`, null, TEXT, true),
       shown.decisions.length === 0
-        ? row('no-decisions', 2, [{ text: 'None.', color: TEXT }])
-        : shown.decisions.map((one, i) => (
-            <Box key={`decision:${i}:${one.label}`} flexDirection="column">
-              {row('decision', 2, [
-                { text: one.label, color: TEXT, bold: true },
-                { text: `: ${one.summary}`, color: TEXT },
-              ])}
-              {one.report !== null && row('report', 4, [{ text: `report ${one.report}`, color: LINK }])}
-            </Box>
-          )),
-      <Text key="gap2" color={TEXT}>
-        {' '}
-      </Text>,
-      row('at', 0, [
-        { text: `Updated ${clock(shown.at)}, every minute and after each reply.${shown.problem === null ? '' : ` ${shown.problem}`}`, color: TEXT },
-      ]),
+        ? row('no-decisions', 'None.')
+        : shown.decisions.map((one, i) => row(`decision:${i}`, `${one.label}: ${one.summary}`, one.report, LINK)),
+      row('updated', `Updated ${clock(shown.at)}, every minute and after each reply.`),
+      shown.problem === null ? null : row('problem', shown.problem, null, WAIT),
     )
   })
 }

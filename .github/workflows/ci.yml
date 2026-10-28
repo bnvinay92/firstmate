@@ -35,6 +35,20 @@ concurrency:
 # at the trigger stays pending and blocks the merge. CONTRIBUTING.md documents
 # the variables.
 jobs:
+  fleet-pane:
+    name: Fleet pane rows
+    runs-on: ubuntu-latest
+    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') }}
+    # Fast tier: pure snapshot projection and label regressions.
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Verify fleet pane inventory and short labels
+        run: node --experimental-strip-types --test mods/fleet-pane/tests/rows.test.mjs
+
   lint:
     name: Lint ${{ matrix.partition }}
     runs-on: ubuntu-latest
