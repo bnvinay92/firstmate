@@ -77,7 +77,7 @@ fm_remote_account_sha256_8() { # <text>
 fm_remote_worker_claude_payload() { # <config-dir>
   local config=$1 resolved root='' cfg creds='' service settings
   FM_REMOTE_ACCOUNT_ERROR=
-  if ! resolved=$(fm_worker_account_resolve claude "$config"); then
+  if ! resolved=$(fm_worker_account_resolve claude "$config" config/claude-account); then
     FM_REMOTE_ACCOUNT_ERROR="this home's config/claude-account pin does not resolve"
     return 1
   fi

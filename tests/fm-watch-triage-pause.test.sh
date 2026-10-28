@@ -717,11 +717,14 @@ test_open_captain_call_bounds_stale_churn() {
 }
 
 
-# The other half of the same bound, and the one that decides whether widening the
-# wait was safe: the identical fixtures with NO hold must keep alarming on every
-# new hash, on both branches.
+# The other half of the same bound: with NO hold, a worker line that names no
+# wait keeps alarming on every new hash, because an idle worker that never said
+# where it stands may have finished silently or wedged. A delivery or blocker
+# line already told firstmate where the worker stands, so it bounds pane churn
+# exactly like a held call: first sight alarms, churn inside the re-surface
+# window is absorbed, and the next new hash after the window alarms once.
 test_stale_churn_without_a_captain_call_still_alarms() {
-  local spec name line dir state out capture round wakes
+  local spec name line dir state out capture round wakes throttle
   command -v tasks-axi >/dev/null 2>&1 \
     || fail "tasks-axi is required (unheld stale alarm)"
   for spec in \
@@ -733,18 +736,33 @@ test_stale_churn_without_a_captain_call_still_alarms() {
     dir=$(make_hold_home "$name" "$line" nohold) \
       || fail "[$name] could not build an unheld backlog fixture"
     state="$dir/state"; out="$dir/watch.out"; capture="$dir/pane.txt"
-    round=1
-    while [ "$round" -le 2 ]; do
+    throttle="$state/.paused-resurfaced-$(hold_key)"
+    hold_watch_surface "$dir" "$out" "$capture" 'idle, elapsed 1s' \
+      || fail "[$name] first sight of an unheld stale window did not surface"
+    wakes=$(hold_stale_wakes "$state")
+    [ "$wakes" -eq 1 ] || fail "[$name] first sight produced $wakes wakes instead of one"
+    ack_stopped_cycle "$state" || fail "[$name] could not acknowledge the first surface"
+    if [ "$name" = unheld-worker-line ]; then
+      round=2
       hold_watch_surface "$dir" "$out" "$capture" "idle, elapsed ${round}s" \
-        || fail "[$name] an unheld stale window stopped alarming on round $round"
+        || fail "[$name] an unheld worker line stopped alarming on round $round"
       wakes=$(hold_stale_wakes "$state")
-      [ "$wakes" -eq 1 ] \
-        || fail "[$name] round $round produced $wakes wakes instead of one"
-      ack_stopped_cycle "$state" || fail "[$name] could not acknowledge round $round"
-      round=$((round + 1))
-    done
+      [ "$wakes" -eq 1 ] || fail "[$name] round $round produced $wakes wakes instead of one"
+      continue
+    fi
+    hold_watch_churn "$dir" "$out" "$capture" 'idle, tick' 2 \
+      || fail "[$name] watcher exited during pane churn on a status firstmate was already shown"
+    wakes=$(hold_stale_wakes "$state")
+    [ "$wakes" -eq 0 ] \
+      || fail "[$name] pane churn re-alarmed an already-shown status $wakes time(s) inside the re-surface window"
+    [ -e "$throttle" ] || fail "[$name] the first alarm recorded no re-surface cadence to elapse"
+    set_mtime "$(( $(date +%s) - 20000 ))" "$throttle"
+    hold_watch_surface "$dir" "$out" "$capture" 'idle, elapsed 9s' \
+      || fail "[$name] an already-shown status did not re-surface once its window elapsed"
+    wakes=$(hold_stale_wakes "$state")
+    [ "$wakes" -eq 1 ] || fail "[$name] elapsed re-surface window produced $wakes wakes instead of one"
   done
-  pass "a stale window with no open captain call keeps alarming on every new hash"
+  pass "an unheld worker line alarms on every new hash, while an already-shown delivery or blocker bounds pane churn to the re-surface cadence"
 }
 
 

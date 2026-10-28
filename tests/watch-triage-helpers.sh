@@ -153,6 +153,29 @@ reap() {
   [ "$rc" -ne 124 ] || fail "watcher pid $1 did not exit within 10s of TERM"
 }
 
+# Record a status log as already shown to firstmate through its first
+# captain-relevant event, exactly as the signal path's mark_surfaced does.
+mark_status_presented() {  # <state> <task>
+  local file="$1/$2.status" record end rest ident
+  record=$(status_span_first_actionable_record "$file" 0)
+  end=${record%%$'\t'*}; rest=${record#*$'\t'}; ident=${rest%%$'\t'*}
+  status_presentation_marker_commit "$1/.hb-surfaced-$2" "$file" "$end" "$ident"
+}
+
+# Start a watcher on one stale pane fixture: the pane hash is already recorded
+# once, so the first poll sees it stale.
+stale_pane_watch_bg() {  # <dir> <window> <pane-text> <out> [extra env...]
+  local dir=$1 window=$2 text=$3 out=$4 key
+  shift 4
+  printf '%s' "$text" > "$dir/pane.txt"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  printf '%s' "$(hash_text "$text")" > "$dir/state/.hash-$key"
+  printf '1\n' > "$dir/state/.count-$key"
+  PATH="$dir/fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_STATE_OVERRIDE="$dir/state" FM_CREW_STATE_BIN="$dir/fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=999 \
+    FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$@" "$WATCH" > "$out" &
+}
+
 # --- pure classifier predicates (fm-classify-lib.sh) ------------------------
 
 size_of() { LC_ALL=C wc -c < "$1" | tr -d '[:space:]'; }

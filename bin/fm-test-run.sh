@@ -399,7 +399,7 @@ family_for_basename() {
       ;;
     fm-check-unregister.test.sh|fm-pipeline-spend.test.sh|fm-pr-check-security.test.sh|\
     fm-pr-health.test.sh|fm-pr-merge.test.sh|fm-pr-reviewers.test.sh|fm-pr-state.test.sh|\
-    fm-review-diff.test.sh|fm-teardown.test.sh|fm-x-mode.test.sh)
+    fm-review-diff.test.sh|fm-teardown.test.sh)
       printf '%s\n' pr-forge
       ;;
     fm-afk-contract.test.sh|fm-afk-inject-e2e.test.sh|fm-afk-return.test.sh|\
@@ -412,19 +412,11 @@ family_for_basename() {
     fm-fleet-snapshot-view.test.sh|fm-home-summary-refresh.test.sh)
       printf '%s\n' snapshot-bearings
       ;;
-    fm-backend-cmux-smoke.test.sh)
-      printf '%s\n' cmux
-      ;;
     fm-backend-paseo.test.sh|fm-backend-paseo-smoke.test.sh)
       printf '%s\n' paseo
       ;;
     fm-backend-rex.test.sh|fm-backend-rex-smoke.test.sh|fm-backend-rex-eventwait-smoke.test.sh)
       printf '%s\n' rex
-      ;;
-    fm-backend-zellij-smoke.test.sh)
-      printf '%s\n' zellij
-      ;;
-    fm-backend-orca.test.sh)
       ;;
     fm-backend-tern.test.sh|fm-backend-tern-smoke.test.sh)
       printf '%s\n' tern
@@ -1465,9 +1457,6 @@ families_for_changed_path() {
       ;;
     bin/backends/tern*|tests/tern-test-safety.sh)
       printf '%s\n' tern
-      printf '%s\n' backend-dispatch
-      ;;
-    bin/backends/tmux.sh)
       printf '%s\n' backend-dispatch
       ;;
     bin/backends/t3code*|bin/fm-t3-mcp.mjs)
