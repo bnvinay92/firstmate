@@ -50,6 +50,8 @@ describe('fleet pane inventory', () => {
     })
     assert.equal(result.decisions.length, 5)
     assert.equal(result.decisions[0].summary, 'Choose the foot point model')
+    assert.equal(result.decisions[0].report, '/mate/data/foot/report.md')
+    assert.equal(result.decisions[2].report, '/mate/state/worker.status')
     assert.equal(result.decisions[1].report, '/mate/data/new/plan.md')
     assert.equal(result.decisions[2].summary, 'worker')
     assert.equal(result.decisions[3].summary, 'modal timing')

@@ -139,7 +139,7 @@ export function parseSnapshot(text: string): { prs: PrRef[]; decisions: Decision
     const identity = `${scope}/${id}/${key}`
     const existing = seenDecisions.get(identity)
     if (existing !== undefined) {
-      existing.report ??= report
+      if (report !== null && (existing.report === null || existing.report.endsWith('/data/backlog.md'))) existing.report = report
       return
     }
     const row = { label: shortLine(scope ? `${scope} · ${id}` : id), summary: shortLine(title), report }
@@ -161,7 +161,7 @@ export function parseSnapshot(text: string): { prs: PrRef[]; decisions: Decision
       const home = asString(mate.home)
       for (const url of (asString(decision.summary) ?? '').match(/https:\/\/github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/pull\/\d+/g) ?? []) addPr(id, url, [])
       addDecision(scope, id, decision.verb === 'captain-hold' ? 'hold' : key, title,
-        detail !== null && detail.startsWith('data/') && home !== null ? `${home}/${detail}` : detail ?? (home === null ? null : `${home}/data/backlog.md`))
+        detail !== null && detail.startsWith('data/') && home !== null ? `${home}/${detail}` : detail ?? (home === null ? null : (decision.source === 'status' ? `${home}/state/${id}.status` : `${home}/data/backlog.md`)))
     }
   }
   for (const entry of asArray(snapshot.tasks)) {
