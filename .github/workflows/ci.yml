@@ -37,7 +37,7 @@ concurrency:
 jobs:
   fleet-pane:
     name: Fleet pane rows
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') }}
     # Fast tier: pure snapshot projection and label regressions.
     timeout-minutes: 5
