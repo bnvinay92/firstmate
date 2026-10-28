@@ -629,16 +629,20 @@ DIRS
   pass "drain: branch outcomes stay unread and the drain fails when jq is missing"
 }
 
-# A drain that cannot print the section, because its output is already
-# closed, has presented nothing, so the rows stay unread for the next drain.
+# A drain that cannot write its output has presented nothing, so the rows stay
+# unread. Keep stdout open read-only: env shebang launchers can reopen a closed
+# standard descriptor as /dev/null, making the write succeed instead.
 test_branch_outcomes_stay_unread_when_the_drain_cannot_print() {
-  local home drained
+  local home drained rc
   home="$TMP_ROOT/drain-closed"
   mkdir -p "$home/state" "$home/config"
   : > "$home/config/supervision-host"
   FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append --task demo --verdict routine --summary 'merged the docs fix' >/dev/null \
     || fail "fixture: could not record the routine outcome"
-  FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" >&- 2>/dev/null' "$ROOT/bin/fm-wake-drain.sh" || true
+  : > "$home/read-only-stdout"
+  rc=0
+  FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" 1<"$FM_HOME/read-only-stdout" 2>"$FM_HOME/drain-write.err"' "$ROOT/bin/fm-wake-drain.sh" || rc=$?
+  [ "$rc" -ne 0 ] || fail "a drain with unwritable stdout must fail before marking outcomes read"
   drained=$(FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" 2>&1' "$ROOT/bin/fm-wake-drain.sh")
   assert_contains "$drained" "[seq 1] demo: merged the docs fix" "a routine outcome a drain could not print must follow on the next drain"
   drained=$(FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" 2>&1' "$ROOT/bin/fm-wake-drain.sh")
