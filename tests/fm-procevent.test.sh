@@ -3441,6 +3441,11 @@ answers=$("$ROOT/bin/fm-procevent-lavish.sh" answers "$READ") || fail "answers f
 printf 'session:\n  file: /a.html\n  status: ended\n  ended_by: user\nprompts[1]:\n  - tag: choice\n' > "$SIL"
 silent_says no "an ended session carrying a list-shaped content block is never assumed empty"
 pass "answers and silence read a list-shaped round like a tabular one"
+
+cat > "$READ" <<'EOF'
+session:
+  file: /review.html
+  status: feedback
 prompts[4]:
   - uid: "1"
     prompt: "first line\nsecond line, with a comma"
