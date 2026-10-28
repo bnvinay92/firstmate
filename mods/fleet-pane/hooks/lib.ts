@@ -180,7 +180,7 @@ export function parseSnapshot(text: string): { prs: PrRef[]; decisions: Decision
       const held = /^captain hold ([A-Za-z0-9._-]+):/.exec(summary.trim())?.[1]
       const key = asString(decision.key) ?? 'default'
       const detail = detailIn(summary) ?? ownReport ?? asString(asRecord(asRecord(task.paths).status_log).path)
-      const home = asString(mates.get(id)?.home)
+      const home = asString(mates.get(id)?.home) ?? (task.kind === 'secondmate' ? asString(asRecord(asRecord(task.paths).home).path) : null)
       const resolvedDetail = detail !== null && detail.startsWith('data/') && home !== null ? `${home}/${detail}` : detail
       if (held !== undefined) {
         addDecision(id, held, 'hold', humanTitle(held), resolvedDetail)

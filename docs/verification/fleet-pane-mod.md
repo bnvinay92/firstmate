@@ -23,7 +23,7 @@ node --experimental-strip-types --input-type=module -e '
 ```
 
 The previous projection produced 11 PR candidates and 21 decision rows.
-The expanded projection recovered ten still-open PRs from one task's status history and two decisions present only in the structured secondmate summary.
+The expanded projection recovered eleven omitted open PRs, including ten from one task's status history, and two decisions present only in the structured secondmate summary.
 The named approval PRs were already present in the previous snapshot, so their reported absence was not an inventory omission in that projection.
 Eight previous decision summaries exceeded 200 characters; the longest was 977 characters.
 The current projection uses the structured hold title or decision key instead of those paragraphs, and caps titles at 100 characters.

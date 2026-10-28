@@ -62,10 +62,12 @@ describe('fleet pane inventory', () => {
 
   it('uses parent relays when a secondmate summary is unavailable', () => {
     const result = read({ secondmate_current: { records: [{ id: 'mate', provenance: { selected: 'parent-event-fallback' }, decisions_open: [] }] }, tasks: [{
-      id: 'mate', paths: { status_log: { path: '/fm/state/mate.status' } },
+      id: 'mate', kind: 'secondmate', paths: { home: { path: '/mate' }, status_log: { path: '/fm/state/mate.status' } },
       hints: { open_decisions: [{ key: 'captain-hold-call-1', verb: 'needs-decision', summary: 'captain hold call: a long reason' }] },
     }] })
     assert.deepEqual(result.decisions, [{ label: 'mate · call', summary: 'call', report: '/fm/state/mate.status' }])
+    const relative = read({ tasks: [{ id: 'mate', kind: 'secondmate', paths: { home: { path: '/mate' } }, hints: { open_decisions: [{ key: 'captain-hold-call-1', verb: 'needs-decision', summary: 'captain hold call: see data/call/report.md' }] } }] })
+    assert.equal(relative.decisions[0].report, '/mate/data/call/report.md')
   })
 })
 
