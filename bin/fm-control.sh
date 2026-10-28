@@ -37,16 +37,12 @@
 #              busy, then submits the harness's exit command. Postcondition:
 #              the backend's recovery-grade classifier reports the agent gone.
 #              Already-stopped is success (idempotent). An endpoint that reads
-#              `missing` (or, on Rex, `unreadable`, which is how a stopped Rex
-#              server reads without starting it) is put through the control
-#              plane's per-backend absence
+#              `missing` is put through the control plane's per-backend absence
 #              proof (fm_control_endpoint_absence_verdict) before anything is
 #              claimed about it, because `missing` also covers an endpoint that
-#              is merely unreachable from this seat. Herdr proves absence by
-#              reading the session the record names; REX proves it because its
-#              never-reused ids answer a structured not-found from the server
-#              the record names.
-#              Proven gone reports `endpoint-gone` rather than
+#              is merely unreachable from this seat. That proof exists only on
+#              HERDR, whose reads are scoped to the session the record names:
+#              proven gone reports `endpoint-gone` rather than
 #              `already-stopped`, because the endpoint this verb normally
 #              preserves did not survive; a pane that turns out to be there and
 #              idle is the ordinary `already-stopped`; one whose agent is back
@@ -55,22 +51,17 @@
 #              endpoint, so this verb cannot tell a destroyed window from one on
 #              a tmux server it cannot address, and it will not claim a stop it
 #              cannot see.
-#              Refused on t3code before anything is sent: T3's `/mcp` tools
-#              have no session stop (bin/fm-control-lib.sh
-#              fm_control_backend_exit_supported); interrupt ends its turn.
 #   relaunch   Transactionally replace the running agent with a new one, in the
 #              SAME worktree - and the same endpoint whenever that endpoint
 #              still exists - on the same or a newly chosen
 #              harness/model/effort - so switching harness is one ordinary use
 #              of this verb. When the recorded endpoint is instead proven gone -
-#              a Herdr pane or workspace destroyed in churn, or a Rex block or
-#              session gone with its server - the launch owner re-creates one in
-#              that worktree, in the herdr session the record names (Rex: the
-#              recorded session while it survives, otherwise the ordinary Rex
-#              placement), and the task's record rebinds to it; that is how a task
+#              a Herdr pane or workspace destroyed in churn - the launch owner
+#              re-creates one in that worktree, in the herdr session the record
+#              names, and the task's record rebinds to it; that is how a task
 #              whose terminal was destroyed is reclaimed by the home that owns
 #              it, rather than being stranded with a parked approval nobody can
-#              answer. Reclaim is HERDR- and REX-ONLY for the reason `exit` gives above:
+#              answer. Reclaim is HERDR-ONLY for the reason `exit` gives above:
 #              a tmux `missing` cannot be proven absent from a task record, so
 #              it refuses.
 #              An explicit `default` model or effort clears that
@@ -91,10 +82,6 @@
 #              The same pre-stop refusal applies to this home's worker tool
 #              exclusions (bin/fm-exclude-tools-lib.sh): a malformed list, or a
 #              replacement runtime that cannot hide the listed tools.
-#              Refused on t3code before anything is stopped: a T3 thread
-#              keeps its conversation, so a new turn or a provider change on
-#              it continues the same agent rather than a fresh one
-#              (fm_control_backend_relaunch_supported).
 #              --note is required for a ship or scout, whose replacement
 #              inherits the local copy but none of the conversation; a
 #              secondmate reconciles its own home's records at startup, so its
@@ -113,8 +100,8 @@
 #
 # `resume` is not a verb: it is not deterministic across the verified adapters
 # (bin/fm-control-lib.sh's header owns that reasoning). `relaunch` covers the
-# same need where the backend can host a replacement because the brief on disk,
-# not a harness-private session, is the durable instruction.
+# same need for every adapter because the brief on disk, not a harness-private
+# session, is the durable instruction.
 #
 # Targeting is EXACT: only a bare task id with a state/<id>.meta record in
 # THIS home is accepted, and the record must pass the shared endpoint-identity
@@ -132,13 +119,11 @@
 #   - A backend that cannot deliver the harness's interrupt key is refused
 #     (Orca's terminal API has no Escape).
 #   - `exit` and `relaunch` require a backend with a recovery-grade agent-state
-#     classifier (tmux, herdr, rex, or t3code), because without one the "the
-#     agent stopped" postcondition cannot be proven. Relaunch also requires
-#     replacement support, which t3code lacks. zellij, orca, cmux, paseo, and tern are
-#     refused rather than reported as successful blind.
+#     classifier (tmux, herdr), because without one the "the agent stopped"
+#     postcondition cannot be proven. zellij, orca, and cmux are refused rather
+#     than reported as successful blind.
 #   - An ambiguous or unreadable endpoint state refuses; only a positively
-#     classified state acts (a Rex `unreadable` first goes through the absence
-#     proof `exit` describes, and refuses unless that proof settles it).
+#     classified state acts.
 #   - A composer that visibly holds pending text refuses before an exit command
 #     is typed, so existing text is preserved instead of being concatenated.
 #
@@ -191,8 +176,6 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-busy-lib.sh"
 # shellcheck source=bin/fm-control-lib.sh
 . "$SCRIPT_DIR/fm-control-lib.sh"
-# shellcheck source=bin/fm-polytoken-lib.sh
-. "$SCRIPT_DIR/fm-polytoken-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
@@ -458,9 +441,6 @@ fm_control_harness_supported "$HARNESS" \
   || die "task $ID records harness '${RECORDED_HARNESS:-none}', which has no verified control mechanics; fm-control refuses to guess an interrupt key or exit command"
 
 fm_backend_validate "$BACKEND" || exit 1
-if [ "$BACKEND" = t3code ]; then
-  fm_backend_runtime_check t3code || exit 1
-fi
 
 # --- shared helpers ---------------------------------------------------------
 
@@ -618,44 +598,12 @@ interrupt_cancel_claim() {
 # cancellation claim available after delivery. `not-running` means an armed
 # adapter's first press rendered no running turn, so nothing was cancelled; a
 # dismissed revert picker is reported beside the claim.
-# The rest transport (polytoken) takes a typed branch before any key is read:
-# the TUI has no interrupt chord at all (fm_control_interrupt_transport), so
-# POST /turn/cancel on the session daemon is the one verified interrupt, with
-# its typed acknowledgement (cancel_requested plus the turn settling) as the
-# claim, and the busy close written here because a cancelled turn emits no
-# stop hook (verified live).
 deliver_interrupt() {
-  local cancel devin_gen='' port cred token
-  if [ "$(fm_control_interrupt_transport "$HARNESS")" = rest ]; then
-    port=$(fm_meta_get "$META" polytoken_port)
-    cred=$(fm_meta_get "$META" polytoken_credential)
-    if [ -z "$port" ] || [ -z "$cred" ]; then
-      die "task $ID records no polytoken session binding (port or credential absent from its record); the REST control verbs address the session's own daemon, so an interrupt cannot be delivered without it. The session has likely ended or was launched raw; reconcile the task or relaunch it"
-    fi
-    token=$(fm_polytoken_credential_token "$cred") || token=
-    [ -n "$token" ] || die "task $ID's polytoken credential at $cred is missing or unreadable, so the session cannot be interrupted through its daemon; the session has likely ended. Reconcile the task or relaunch it"
-    # A cancelled turn emits no stop hook (verified live), so the close the
-    # hooks would have written lands with the cancel: the settled turn is the
-    # typed proof this incarnation is no longer busy, unless a queued prompt
-    # has reopened it (fm_polytoken_interrupt_task).
-    cancel=$(fm_polytoken_interrupt_task "$SCRIPT_DIR" "$STATE" "$ID" "$port" "$token" "$SETTLE_WAIT") \
-      || die "task $ID's polytoken turn cancel was not acknowledged on port $port within ${SETTLE_WAIT}s; the interrupt status is unknown, so no further control action is safe here"
-    INTERRUPT_ARMED=yes
-    INTERRUPT_HAZARD=none
-    printf '%s' "$cancel"
-    return 0
-  fi
+  local cancel devin_gen=
   # Devin does not emit Stop for cancellation. Capture this incarnation before
   # keys, then invalidate its state conservatively rather than claiming idle.
   if [ "$HARNESS" = devin ]; then
     devin_gen=$(fm_busy_current_gen "$STATE" "$ID" 2>/dev/null || true)
-  fi
-  # T3 Code has no keys: its native interrupt confirms the run's end itself.
-  if [ "$BACKEND" = t3code ]; then
-    cancel=$(fm_backend_t3code_native_interrupt "$T") \
-      || die "interrupt was not delivered to task $ID on $BACKEND"
-    printf '%s' "${cancel:-unconfirmed}"
-    return 0
   fi
   prepare_interrupt_ack
   send_interrupt_keys
@@ -762,8 +710,6 @@ retire_busy_incarnation() {
 do_exit() {
   local state cmd hazard verdict composer_state cancel absence interrupt_result=not-needed dialog
   require_state_verified_backend exit
-  fm_control_backend_exit_supported "$BACKEND" \
-    || die "task $ID runs on the $BACKEND backend, whose T3 Orchestrator V2 tools have no session stop, so 'exit' cannot stop its agent; 'interrupt' ends the running turn and teardown archives the thread"
   state=$(agent_state)
   case "$state" in
     dead)
@@ -771,14 +717,12 @@ do_exit() {
       return 0
       ;;
     alive) ;;
-    *)
-      fm_control_absence_recheck_applies "$BACKEND" "$state" \
-        || die "task $ID's endpoint reads '$state' rather than a positively classified state; refusing to send a lifecycle command into an unattributed endpoint"
+    missing)
       # `missing` on its own is not a finding about the endpoint: it conflates
       # "destroyed" with "unreachable from this seat". Route it through the
       # control plane's one absence proof - the same one the relaunch gate uses
       # - and report what that proof actually established, never more.
-      absence=$(fm_control_endpoint_absence_verdict "$BACKEND" "$T" "$META")
+      absence=$(fm_control_endpoint_absence_verdict "$BACKEND" "$T")
       case "${absence%%$'\t'*}" in
         gone)
           # Proven gone, so the agent that lived in it went with it: exit's
@@ -803,10 +747,11 @@ do_exit() {
           # alive path: interrupt if busy, then the harness's exit command.
           ;;
         *)
-          die "task $ID's endpoint $T reads '$state', but ${absence#*$'\t'}; exit will not claim an agent stopped at an address it cannot trust, nor send lifecycle input to one"
+          die "task $ID's endpoint $T reads 'missing', but ${absence#*$'\t'}; exit will not claim an agent stopped at an address it cannot trust, nor send lifecycle input to one"
           ;;
       esac
       ;;
+    *) die "task $ID's endpoint reads '$state' rather than a positively classified state; refusing to send a lifecycle command into an unattributed endpoint" ;;
   esac
   # A busy agent is interrupted first before the exit command is submitted.
   case "$(busy_verdict)" in
@@ -1118,20 +1063,6 @@ resolve_relaunch_profile() {
     "$account_model" "$TARGET_HARNESS" "" "$account_mate" >/dev/null || return 1
   fm_omp_profile_select "$TARGET_HARNESS" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" \
     "$account_mate" >/dev/null || return 1
-  # Likewise polytoken's launch profile and wiring refusals
-  # (bin/fm-polytoken-lib.sh owns them). The launch owner retires the prior
-  # incarnation's own generated hook layer, so only one it did not generate
-  # refuses here.
-  if [ "$TARGET_HARNESS" = polytoken ]; then
-    local polytoken_bin polytoken_state
-    polytoken_bin=$(fm_polytoken_binary) || return 1
-    fm_polytoken_launch_ref "$polytoken_bin" "$TARGET_MODEL" "$TARGET_EFFORT" >/dev/null || return 1
-    polytoken_state=$(cd "$STATE" && pwd -P) || return 1
-    fm_polytoken_require_handler_path "$(fm_polytoken_busy_script "$polytoken_state" "$ID")" || return 1
-    fm_control_harness_wiring_paths "$PRIOR_HARNESS" "$WT" "$STATE" "$ID" "$KIND" \
-        | grep -qxF "$(fm_polytoken_hooks_file "$WT")" \
-      || fm_polytoken_require_hooks_free "$WT" || return 1
-  fi
   # Likewise config/crew-exclude-tools: a malformed file, or a replacement
   # runtime that cannot hide the listed tools, refuses here, before the old
   # agent stops. Secondmate agents are not covered.
@@ -1246,8 +1177,6 @@ do_relaunch() {
   local -a spawn_args
 
   require_state_verified_backend relaunch
-  fm_control_backend_relaunch_supported "$BACKEND" \
-    || die "task $ID runs on the $BACKEND backend, where a thread keeps its conversation and a new turn or provider change continues the same agent, so no fresh replacement can be launched into its endpoint; 'interrupt' ends its turn, and a fresh task needs a teardown and a new dispatch"
   resolve_relaunch_profile
 
   case "$KIND" in

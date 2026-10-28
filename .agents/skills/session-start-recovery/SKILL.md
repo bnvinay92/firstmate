@@ -9,7 +9,7 @@ metadata:
 # Session-start recovery
 
 The digest itself makes no external-network call and never waits for one.
-Every network check a session start owes - GitHub auth, secondmate recovery, secondmate convergence, pending handoff delivery, and project clone refresh - runs off the digest's blocking path in a bounded worker owned by `bin/fm-startup-network.sh` and is reported in the digest's own `NETWORK CHECKS` section.
+Every network check a session start owes - GitHub auth, dead-secondmate relaunch, secondmate convergence, pending handoff delivery, and project clone refresh - runs off the digest's blocking path in a bounded worker owned by `bin/fm-startup-network.sh` and is reported in the digest's own `NETWORK CHECKS` section.
 The locked startup inactive-outcome scan joins that worker so a slow local current-state read cannot block the digest; its findings use the ordinary durable wake queue.
 
 1. **Lock** - acquires the per-home session lock first, before anything mutates shared state, then starts the deferred startup stage above.
@@ -17,7 +17,7 @@ The locked startup inactive-outcome scan joins that worker so a slow local curre
    When the lock could not be acquired, the worktree-tangle check uses read-only advisory wording without a checkout repair command.
    Home-local stale Herdr projection cleanup and the five bootstrap MUTATING sweeps - same-home backlog reconciliation, fleet sync, secondmate convergence, secondmate liveness, and pending remote handoff retry - run only when this session actually holds the lock from step 1; the four network ones among them run in the deferred stage rather than in this section.
    The secondmate liveness sweep accounts for every registered secondmate and reports skipped or failed recovery as `SECONDMATE_LIVENESS:` lines.
-   The sweep and the watcher's cadence-gated tick share the [recovery contract](../../../bin/fm-secondmate-liveness-lib.sh); for T3 threads, follow the [native recovery guide](../../../docs/t3code-backend.md#restart-and-liveness-behavior).
+   The sweep and the watcher's cadence-gated tick share the [recovery contract](../../../bin/fm-secondmate-liveness-lib.sh).
 3. **Wake queue** - when locked, drains and presents the durable wake queue without running the inactive-outcome scan inline, and prints the raw records prominently as this turn's first work queue; a clearly labeled status-event annotation may follow a valid `signal` record and includes every status line still unread at the presentation cursor, but never replaces the raw record or current-state reconciliation, and a lapsed watcher chain still surfaces here via the same guard alarm.
    Presented records remain durable until the handling turn runs the generation-bound acknowledgement printed by the drain.
    Every locked drain also prints a bounded fleet-wide `OPEN DECISIONS` section when durable decision records remain open, including when the queue itself is empty; reconcile those entries before continuing.

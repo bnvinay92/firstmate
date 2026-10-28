@@ -28,10 +28,6 @@
     "docs/wedge-alarm.md",
     "docs/tmux-backend.md",
     "docs/herdr-backend.md",
-    "docs/paseo-backend.md",
-    "docs/rex-backend.md",
-    "docs/t3code-backend.md",
-    "docs/tern-backend.md",
     "docs/remote-secondmates.md"
   ],
   "requiredOwnerPointers": [
@@ -85,14 +81,6 @@
     },
     {
       "source": "docs/herdr-backend.md",
-      "target": "docs/verification/runtime-backends.md"
-    },
-    {
-      "source": "docs/t3code-backend.md",
-      "target": "docs/verification/runtime-backends.md"
-    },
-    {
-      "source": "docs/tern-backend.md",
       "target": "docs/verification/runtime-backends.md"
     },
     {
@@ -166,15 +154,7 @@
       "audience": "agent-runtime"
     },
     {
-      "path": ".agents/skills/harness-adapters/references/harness/cortex.md",
-      "audience": "agent-runtime"
-    },
-    {
       "path": ".agents/skills/harness-adapters/references/harness/opencode.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/harness-adapters/references/harness/polytoken.md",
       "audience": "agent-runtime"
     },
     {
@@ -258,10 +238,6 @@
       "audience": "maintainer-architecture"
     },
     {
-      "path": "docs/tern-backend.md",
-      "audience": "operator-current"
-    },
-    {
       "path": "docs/configuration.md",
       "audience": "operator-current"
     },
@@ -334,14 +310,6 @@
       "audience": "maintainer-architecture"
     },
     {
-      "path": "docs/paseo-backend.md",
-      "audience": "operator-current"
-    },
-    {
-      "path": "docs/rex-backend.md",
-      "audience": "operator-current"
-    },
-    {
       "path": "docs/pi-supervision-branch.md",
       "audience": "maintainer-architecture"
     },
@@ -394,10 +362,6 @@
       "audience": "maintainer-architecture"
     },
     {
-      "path": "docs/t3code-backend.md",
-      "audience": "operator-current"
-    },
-    {
       "path": "docs/tmux-backend.md",
       "audience": "operator-current"
     },
@@ -418,10 +382,6 @@
       "audience": "operator-current"
     },
     {
-      "path": "docs/verification/cortex.md",
-      "audience": "maintainer-verification"
-    },
-    {
       "path": "docs/verification/dispatch-auth.md",
       "audience": "maintainer-verification"
     },
@@ -439,10 +399,6 @@
     },
     {
       "path": "docs/verification/process-event-sources.md",
-      "audience": "maintainer-verification"
-    },
-    {
-      "path": "docs/verification/polytoken.md",
       "audience": "maintainer-verification"
     },
     {

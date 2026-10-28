@@ -33,7 +33,7 @@ For recovery and control, use the exact `harness=` in `state/<id>.meta`; never i
 Deliver lifecycle actions only through `../../../bin/fm-control.sh <task-id> interrupt|exit|relaunch`.
 Never type an interrupt key or exit command through `fm-send`, where routing-marked lifecycle text becomes chat.
 Trust handling is complete only when inspection proves the target started processing its instructions; delivery success alone is not proof.
-Muse, Gemini, AGY, Devin, Command Code, Polytoken, and Cortex are verified only for crewmate and scout work, never a secondmate or primary.
+Muse, Gemini, AGY, and Devin are verified only for crewmate and scout work, never a secondmate or primary.
 
 ## Detection
 
@@ -83,9 +83,7 @@ A new tool remains undispatchable until the `verify` plan, its harness entry, ev
   "harnesses": {
     "claude": "references/harness/claude.md",
     "codex": "references/harness/codex.md",
-    "opencode": "references/harness/opencode.md",
-    "polytoken": "references/harness/polytoken.md",
-    "cortex": "references/harness/cortex.md"
+    "opencode": "references/harness/opencode.md"
   }
 }
 ```
