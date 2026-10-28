@@ -386,9 +386,14 @@ first_pr_url_in_file() {  # <file>
 }
 
 # All task-recorded PRs, without forge reads or report-body inference.
-pr_urls_in_files() {
-  jq -R -s '[scan("https://github\\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/pull/[0-9]+") ] | unique' "$@"
-}
+pr_urls_in_files() (
+  local file
+  set -o pipefail
+  for file in "$@"; do
+    [ -f "$file" ] || continue
+    cat -- "$file" || exit 1
+  done | jq -R -s '[scan("https://github\\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/pull/[0-9]+") ] | unique'
+)
 
 backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
   local backlog=${1:-$BACKLOG}
