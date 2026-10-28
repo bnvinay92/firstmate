@@ -682,7 +682,7 @@ test_unverified_state_backends_refuse_stop_verbs() {
 # relaunch onto commandcode there while the running agent is untouched.
 test_commandcode_relaunch_off_tmux_and_herdr_refuses_before_stopping() {
   local dir out rc backend meta_before
-  for backend in tern; do
+  backend=tern
     dir=$(new_case "cc-relaunch-$backend")
     case "$backend" in
       zellij)
@@ -716,7 +716,6 @@ test_commandcode_relaunch_off_tmux_and_herdr_refuses_before_stopping() {
       || fail "a refused commandcode relaunch on $backend must leave the task record unchanged"
     [ ! -e "$dir/home/state/t1.control-relaunch" ] && [ ! -e "$dir/home/state/t1.control-relaunch.meta-prior" ] \
       || fail "a refused commandcode relaunch on $backend must open no relaunch transaction"
-  done
   pass "fm-control relaunch: commandcode off tmux and herdr is refused before the running agent is stopped"
 }
 

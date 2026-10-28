@@ -391,7 +391,7 @@ test_review_bot_watching_is_opt_in() {
 test_review_bot_allowlist_is_configurable() {
   local home config out token
   home=$(new_home review-bot-config)
-  config=review-config
+  config="review-config"
   forge_home "$home"
   mkdir -p "$home/$config"
   printf 'custom-review[bot]\n' > "$home/$config/contribution-review-bots"
