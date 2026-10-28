@@ -296,14 +296,25 @@ done
 # A short proof budget keeps the exhausted-proof path fast; the count below is
 # what proves the proof was exhausted rather than skipped.
 C_PROOF_POLLS=3
+# The free-running sampler can miss a short wrong-focus window entirely, so the
+# wrapper also reads focus once, right after the explicit close returns and
+# before the production restore can run.
+C_POST_CLOSE="$TMP_ROOT/post-close-c.json"
+rm -f "$C_POST_CLOSE"
 C_OUT=$(PATH="$FAKEBIN:$HERDR_ORIGINAL_PATH" FM_FLASH_CALL_LOG="$C_CALL_LOG" \
+  FM_FLASH_POST_CLOSE="$C_POST_CLOSE" \
   FM_BACKEND_HERDR_IDLE_SHELL_PROOF_POLLS="$C_PROOF_POLLS" bash -c '
   . "$1/bin/backends/herdr.sh"
   fm_backend_herdr_cli() {
-    local session=$1
+    local session=$1 rc
     shift
     printf "%s\n" "$*" >> "$FM_FLASH_CALL_LOG"
     HERDR_SESSION="$session" herdr "$@" --session "$session"
+    rc=$?
+    if [ "${1:-} ${2:-}" = "pane close" ]; then
+      HERDR_SESSION="$session" herdr workspace list --session "$session" > "$FM_FLASH_POST_CLOSE" 2>/dev/null || :
+    fi
+    return "$rc"
   }
   fm_backend_herdr_projection_close_pane_focus_preserving "$2" "$3"
 ' _ "$ROOT" "$HERDR_LAB_SESSION" "$C_DOOMED_PANE" 2>&1)
@@ -334,18 +345,22 @@ C_AFTER=$(focus_snapshot) || fail 'could not capture the Part C post-close focus
 [ "$C_AFTER" = "$C_BEFORE" ] \
   || fail "the fallback close left focus off the anchor ($C_BEFORE -> $C_AFTER)"
 C_WRONG=$(grep -Fvxc -- "$C_BEFORE" "$C_FOCUS_SAMPLES" || true)
+C_POST_CLOSE_WS=$(jq -er '[.result.workspaces[] | select(.focused == true)] | select(length == 1) | .[0].workspace_id' "$C_POST_CLOSE" 2>/dev/null) \
+  || fail 'could not read the Part C focus right after the explicit close'
+C_POST_CLOSE_WRONG=0
+[ "$C_POST_CLOSE_WS" = "${C_BEFORE%%$'\t'*}" ] || C_POST_CLOSE_WRONG=1
 if [ "$STEAL_LIVE" = 1 ]; then
   # A defective release cannot make this path focus-safe, which is precisely why
   # default-on projection is floored above it. The wrong-focus window is
   # explicitly accepted here, but only as a BOUNDED one: the restore backstop
   # must have put the anchor back exactly, and the whole exposure must end with
   # the operation rather than parking the captain somewhere else.
-  [ "$C_WRONG" -ge 1 ] \
+  [ "$((C_WRONG + C_POST_CLOSE_WRONG))" -ge 1 ] \
     || fail 'Part C reached the fallback on a defective release but observed no wrong-focus sample at all, so the sampler proved nothing'
-  pass "fallback on a defective release: a bounded wrong-focus window of $C_WRONG samples was fully restored to the anchor"
+  pass "fallback on a defective release: a bounded wrong-focus window of $C_WRONG samples (post-close focus $C_POST_CLOSE_WS) was fully restored to the anchor"
 else
-  [ "$C_WRONG" -eq 0 ] \
-    || fail "a focus-preserving release exposed $C_WRONG wrong-focus samples on the fallback path"
+  [ "$C_WRONG" -eq 0 ] && [ "$C_POST_CLOSE_WRONG" -eq 0 ] \
+    || fail "a focus-preserving release exposed $C_WRONG wrong-focus samples (post-close focus $C_POST_CLOSE_WS) on the fallback path"
   pass 'fallback on a focus-preserving release: the plain explicit close preserved exact focus throughout'
 fi
 
