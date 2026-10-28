@@ -806,7 +806,7 @@ test_view_renders_snapshot() {
   view=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$VIEW")
   assert_contains "$view" "| ship-task | working / pane | ship | alpha | tmux | present | https://github.com/kunchenguid/firstmate/pull/9" \
     "view should render ship row from snapshot"
-  assert_contains "$view" "| queued-task | Queued Task | alpha | ship | ship-task | -" \
+  assert_contains "$view" "| queued-task | Queued Task | alpha | ship | ship-task | https://github.com/kunchenguid/firstmate/pull/12 |" \
     "view should render queued backlog row"
   assert_contains "$view" "| done-task | Done Task | alpha | ship | - | https://github.com/kunchenguid/firstmate/pull/7 |" \
     "view should render done backlog row"

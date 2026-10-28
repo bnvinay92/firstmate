@@ -50,6 +50,6 @@ claude plugin test mods/fleet-pane
 
 The rendering suite now asserts one line per item at 70 and 34 columns, whole hyperlink targets after resizing, and short decision titles.
 It also covers read-only snapshot flags, the batched GitHub query budget, merged PR removal, theme colours, persisted closing, and refresh after `/clear`.
-Local tests were not run for the 2026-10-28 change because the operating home's policy delegates test execution to CI.
+The portable CI result remains the stock Bash compatibility evidence; targeted local diagnostics do not replace it.
 The earlier 2026-10-16 interactive observation established automatic pane opening and refresh with version 2.1.301; its multiline layout is superseded by the current single-line contract and is not evidence for the new rendering.
 Re-run the interactive commands after a host upgrade before relying on the rendering contract for a newer build.
