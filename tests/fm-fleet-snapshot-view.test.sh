@@ -80,6 +80,7 @@ write_fixture() {  # <home>
 
 ## Queued
 - [ ] queued-task - Queued Task blocked-by: ship-task (repo: alpha) (kind: ship) (since 2026-07-08)
+  Also drives https://github.com/kunchenguid/firstmate/pull/12
 handoff note without canonical syntax
 
 ## Done
@@ -160,6 +161,11 @@ test_fixture_snapshot_json() {
   fakebin=$(make_fakebin "$home")
   out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
   printf '%s' "$out" | jq -e . >/dev/null || fail "snapshot must be valid JSON"
+  printf '%s' "$out" | jq -e '
+    .backlog.records[] | select(.id == "queued-task")
+    | .pr_url == "https://github.com/kunchenguid/firstmate/pull/12"
+      and .links == ["https://github.com/kunchenguid/firstmate/pull/12"]
+  ' >/dev/null || fail "backlog body PR links missing"
   ids=$(printf '%s' "$out" | jq -r '.tasks | map(.id) | join(",")')
   [ "$ids" = "cmux-task,scout-task,secondmate-task,ship-task" ] \
     || fail "task ordering must be stable by id, got $ids"
