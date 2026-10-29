@@ -90,6 +90,36 @@ PL
   pass "Perl fallback honors the cleanup bound before escalating an INT-ignoring direct watcher"
 }
 
+test_non_gnu_timeout_is_not_trusted_with_the_cleanup_bound() {
+  local home fake_bin status
+  home=$(make_home uutils-timeout)
+  fake_bin="$home/fake-bin"
+  mkdir -p "$fake_bin"
+  # Mimics uutils timeout 0.10: under --signal=INT it ignores --kill-after and
+  # kills at the bound with 137; any other use runs the command unbounded.
+  cat > "$fake_bin/timeout" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in --version) echo 'timeout (uutils coreutils) 0.10.0'; exit 0 ;; esac
+for arg in "$@"; do
+  case "$arg" in --signal=INT) : > "$FM_HOME/uutils-int-bound-used"; exit 137 ;; esac
+done
+while [ "$#" -gt 0 ]; do case "$1" in -k|-s) shift 2 ;; -*) shift ;; *) shift; break ;; esac; done
+exec "$@"
+SH
+  chmod +x "$fake_bin/timeout"
+
+  status=0
+  PATH="$fake_bin:$PATH" FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 \
+    "$CHECKPOINT" --seconds 1 >"$home/out.txt" 2>"$home/err.txt" || status=$?
+
+  expect_code 124 "$status" "non-GNU timeout checkpoint exit"
+  assert_contains "$(cat "$home/out.txt")" "checkpoint: no actionable wake within 1s" \
+    "a non-GNU timeout must still give a quiet checkpoint"
+  assert_absent "$home/uutils-int-bound-used" "the checkpoint trusted a non-GNU timeout with its cleanup bound"
+  assert_absent "$home/state/.watch.lock/pid" "watch lock pid survived a non-GNU timeout checkpoint"
+  pass "a non-GNU timeout is not trusted with the watcher cleanup bound"
+}
+
 test_announced_recovery_is_not_reannounced_by_next_checkpoint() {
   local home out err status marker
   home=$(make_home announced-recovery)
@@ -346,6 +376,7 @@ test_real_host_checkpoint_ends_quietly_at_its_bound() {
 
 test_quiet_checkpoint_exits_124_cleanly
 test_perl_timeout_fallback_honors_cleanup_bound_before_escalating
+test_non_gnu_timeout_is_not_trusted_with_the_cleanup_bound
 test_announced_recovery_is_not_reannounced_by_next_checkpoint
 test_never_announced_recovery_is_announced_once
 test_queue_append_during_checkpoint_still_resurfaces

@@ -11,7 +11,7 @@ import {
   prQuery,
   prRow,
   reportIn,
-  wrapSpans,
+  shortLine,
 } from '../hooks/lib'
 import type { PrRef, PrStatus } from '../hooks/lib'
 
@@ -84,8 +84,8 @@ describe('reading the snapshot', () => {
 
   test('lists open decisions and live captain holds, never a worker blocker', () => {
     expect(parseSnapshot(JSON.stringify(SNAPSHOT))?.decisions).toEqual([
-      { label: 'booking-explore · s6-cli-q', summary: 'Should the CLI build alone? Report data/s6-codex-cp1/report.md, Questions.', report: 'data/s6-codex-cp1/report.md' },
-      { label: 'ksm-debug', summary: 'Unlock the phone, or close out on JVM evidence?', report: '/fm/data/ksm-debug/report.md' },
+      { label: 'booking-explore · s6-cli-q', summary: 's6 cli q', report: 'data/s6-codex-cp1/report.md' },
+      { label: 'ksm-debug', summary: 'device locked', report: '/fm/data/ksm-debug/report.md' },
       { label: 'inspector-lavish-ship', summary: 'Ship the Lavish review page?', report: null },
     ])
   })
@@ -96,7 +96,7 @@ describe('reading the snapshot', () => {
   })
 
   test('a decision without a hold name keeps the task as its label', () => {
-    expect(decisionText('t1', '  Pick\n one ')).toEqual({ label: 't1', summary: 'Pick one' })
+    expect(decisionText('t1', '  Pick\n one ')).toEqual({ label: 't1', summary: 't1' })
     expect(reportIn('see /abs/home/data/x-y/report.md for more')).toBe('/abs/home/data/x-y/report.md')
     expect(reportIn('no report here')).toBeNull()
   })
@@ -296,19 +296,16 @@ describe('what blocks a pull request', () => {
   })
 })
 
-describe('wrapping a line to the pane', () => {
-  const lines = (text: string, first: number, rest: number) => wrapSpans(text, first, rest).map(([a, b]) => text.slice(a, b))
-
-  test('breaks at spaces, each line within its width', () => {
-    expect(lines('checks passing - needs an approving review', 20, 18)).toEqual(['checks passing -', 'needs an approving', 'review'])
+describe('short labels', () => {
+  test('collapses whitespace and caps long titles with a clean ellipsis', () => {
+    expect(shortLine(' A\n title\twith details ', 14)).toBe('A title with…')
+    expect(shortLine('short', 20)).toBe('short')
+    expect(shortLine('long', 1)).toBe('…')
   })
 
-  test('splits a word longer than a line rather than cutting it off', () => {
-    expect(lines('https://github.com/a/b/pull/7', 12, 10)).toEqual(['https://gith', 'ub.com/a/b', '/pull/7'])
-  })
-
-  test('a short or empty line stays one line', () => {
-    expect(lines('None.', 40, 38)).toEqual(['None.'])
-    expect(lines('', 40, 38)).toEqual([''])
+  test('never shows a hold reason as the decision title', () => {
+    expect(decisionText('mate', 'captain hold modal-timing: ' + 'reason '.repeat(200))).toEqual({
+      label: 'mate · modal-timing', summary: 'modal timing',
+    })
   })
 })

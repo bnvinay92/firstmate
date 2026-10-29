@@ -80,6 +80,7 @@ write_fixture() {  # <home>
 
 ## Queued
 - [ ] queued-task - Queued Task blocked-by: ship-task (repo: alpha) (kind: ship) (since 2026-07-08)
+  Also drives https://github.com/kunchenguid/firstmate/pull/12
 handoff note without canonical syntax
 
 ## Done
@@ -96,7 +97,9 @@ EOF
     "mode=ship" \
     "yolo=off" \
     "pr=https://github.com/kunchenguid/firstmate/pull/9"
-  printf 'needs-decision: choose an API shape\n' > "$home/state/ship-task.status"
+  printf '%s\n' 'needs-decision: choose an API shape' \
+    'working: stack https://github.com/kunchenguid/firstmate/pull/10 and https://github.com/kunchenguid/firstmate/pull/11#discussion_r1' \
+    'paused: duplicate https://github.com/kunchenguid/firstmate/pull/10' > "$home/state/ship-task.status"
   # A working ship task proves it through its own semantic busy-state record
   # (bin/fm-busy-lib.sh), which is what the snapshot's current-state read
   # consults; rendered pane text is no longer a state source.
@@ -158,6 +161,11 @@ test_fixture_snapshot_json() {
   fakebin=$(make_fakebin "$home")
   out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
   printf '%s' "$out" | jq -e . >/dev/null || fail "snapshot must be valid JSON"
+  printf '%s' "$out" | jq -e '
+    .backlog.records[] | select(.id == "queued-task")
+    | .pr_url == "https://github.com/kunchenguid/firstmate/pull/12"
+      and .links == ["https://github.com/kunchenguid/firstmate/pull/12"]
+  ' >/dev/null || fail "backlog body PR links missing"
   ids=$(printf '%s' "$out" | jq -r '.tasks | map(.id) | join(",")')
   [ "$ids" = "cmux-task,scout-task,secondmate-task,ship-task" ] \
     || fail "task ordering must be stable by id, got $ids"
@@ -166,6 +174,7 @@ test_fixture_snapshot_json() {
     | .current_state.state == "working"
       and .current_state.source == "pane"
       and .pr.url == "https://github.com/kunchenguid/firstmate/pull/9"
+      and .pr.urls == ["https://github.com/kunchenguid/firstmate/pull/10", "https://github.com/kunchenguid/firstmate/pull/11", "https://github.com/kunchenguid/firstmate/pull/9"]
       and .backlog.body_excerpt == "Preserve this detail for bearings."
       and .hints.pending_decision == false
       and .paths.status_log.kind == "event_history"
@@ -797,7 +806,7 @@ test_view_renders_snapshot() {
   view=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$VIEW")
   assert_contains "$view" "| ship-task | working / pane | ship | alpha | tmux | present | https://github.com/kunchenguid/firstmate/pull/9" \
     "view should render ship row from snapshot"
-  assert_contains "$view" "| queued-task | Queued Task | alpha | ship | ship-task | -" \
+  assert_contains "$view" "| queued-task | Queued Task | alpha | ship | ship-task | https://github.com/kunchenguid/firstmate/pull/12 |" \
     "view should render queued backlog row"
   assert_contains "$view" "| done-task | Done Task | alpha | ship | - | https://github.com/kunchenguid/firstmate/pull/7 |" \
     "view should render done backlog row"

@@ -30,6 +30,7 @@ export type PrRef = {
   owner: string
   repo: string
   number: number
+  title?: string
   // Other backlog items this task still waits on.
   waitsOn: string[]
 }
@@ -70,26 +71,41 @@ const asRecord = (value: unknown): Record<string, unknown> =>
 const asArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : [])
 const asString = (value: unknown): string | null => (typeof value === 'string' && value !== '' ? value : null)
 
-// A decision's one-line form: a relayed captain hold leads with its own name,
-// which becomes part of the label; whitespace collapses to single spaces.
-export function decisionText(task: string, summary: string): { label: string; summary: string } {
-  const flat = summary.replace(/\s+/g, ' ').trim()
-  const held = /^captain hold ([A-Za-z0-9._-]+):\s*(.*)$/.exec(flat)
-  if (held === null) return { label: task, summary: flat }
-  return { label: `${task} · ${held[1]}`, summary: held[2] ?? '' }
+// Labels are bounded and never carry prose, newlines or terminal controls.
+export function shortLine(text: string, limit = 100): string {
+  const flat = text.replace(/[\s\u0000-\u001f\u007f-\u009f]+/g, ' ').trim()
+  const chars = Array.from(flat)
+  if (chars.length <= limit) return flat
+  if (limit < 2) return limit > 0 ? '…' : ''
+  const head = chars.slice(0, limit - 1).join('')
+  const space = head.lastIndexOf(' ')
+  return `${(space > head.length / 2 ? head.slice(0, space) : head).trimEnd()}…`
 }
 
-// The first report a decision's text names, such as data/s6-convert/report.md.
+const humanTitle = (key: string) => key.replace(/[-_]+/g, ' ')
+
+// A hold's name or explicit title identifies the call; its reason is detail.
+export function decisionText(task: string, summary: string, title?: string, key?: string): { label: string; summary: string } {
+  const held = /^captain hold ([A-Za-z0-9._-]+):/.exec(summary.trim())
+  const name = held?.[1]
+  return {
+    label: shortLine(name === undefined ? task : `${task} · ${name}`),
+    summary: shortLine(title || humanTitle(name ?? (key === 'default' ? task : key) ?? task)),
+  }
+}
+
+// A report or plan named by a decision, before its first web detail link.
 export function reportIn(text: string): string | null {
-  return /(?:^|[\s(])((?:\/[^\s,;()]+\/)?data\/[^\s,;()]+\/report\.md)/.exec(text)?.[1] ?? null
+  return /(?:^|[\s(])((?:\/[^\s,;()]+\/)?data\/[^\s,;()]+\.md)/.exec(text)?.[1] ?? null
 }
 
-// Every open pull request and every decision waiting on the captain, read from
-// one snapshot: a task's recorded pull request, a still-open `needs-decision`
-// in a task's status log (the fold the wake drain's OPEN DECISIONS uses, so a
-// second mate's relayed captain holds are included), and every backlog item
-// held for the captain that is due now. A worker's own blocker is the
-// supervisor's to clear, so it is not listed.
+function detailIn(text: string): string | null {
+  return reportIn(text) ?? /https?:\/\/[^\s<>]+/.exec(text)?.[0]?.replace(/[.,;)]+$/, '') ?? null
+}
+
+// Structured secondmate decisions supply short titles; keyed parent relays
+// fill any gaps. Keep legacy snapshots readable, and never invent a PR from
+// a bare number or a decision from reason prose.
 export function parseSnapshot(text: string): { prs: PrRef[]; decisions: DecisionRow[] } | null {
   let raw: unknown
   try {
@@ -101,37 +117,93 @@ export function parseSnapshot(text: string): { prs: PrRef[]; decisions: Decision
   if (snapshot.schema !== 'fm-fleet-snapshot.v1') return null
   const prs: PrRef[] = []
   const decisions: DecisionRow[] = []
-  const seen = new Set<string>()
+  const seenPrs = new Map<string, PrRef>()
+  const seenDecisions = new Map<string, DecisionRow>()
+  const mates = new Map<string, Record<string, unknown>>()
+  const addPr = (task: string, candidate: unknown, waits: unknown, title?: unknown) => {
+    const parsed = typeof candidate === 'string' ? parsePrUrl(candidate) : null
+    if (parsed === null) return
+    const url = `https://github.com/${parsed.owner}/${parsed.repo}/pull/${parsed.number}`
+    const waitsOn = asArray(waits).filter((one): one is string => typeof one === 'string')
+    const existing = seenPrs.get(url.toLowerCase())
+    if (existing !== undefined) {
+      existing.waitsOn = [...new Set([...existing.waitsOn, ...waitsOn])]
+      return
+    }
+    const name = asString(title)
+    const ref = { task, url, ...parsed, waitsOn, ...(name === null ? {} : { title: shortLine(name) }) }
+    seenPrs.set(url.toLowerCase(), ref)
+    prs.push(ref)
+  }
+  const addDecision = (scope: string, id: string, key: string, title: string, report: string | null) => {
+    const identity = `${scope}/${id}/${key}`
+    const existing = seenDecisions.get(identity)
+    if (existing !== undefined) {
+      if (report !== null && (existing.report === null || existing.report.endsWith('/data/backlog.md'))) existing.report = report
+      return
+    }
+    const row = { label: shortLine(scope ? `${scope} · ${id}` : id), summary: shortLine(title), report }
+    seenDecisions.set(identity, row)
+    decisions.push(row)
+  }
+  for (const entry of asArray(asRecord(snapshot.secondmate_current).records)) {
+    const mate = asRecord(entry)
+    const scope = asString(mate.id)
+    if (scope === null || asRecord(mate.provenance).selected !== 'structured-home') continue
+    mates.set(scope, mate)
+    for (const entry of asArray(mate.decisions_open)) {
+      const decision = asRecord(entry)
+      if (decision.verb !== 'needs-decision' && decision.verb !== 'captain-hold') continue
+      const id = asString(decision.id) ?? scope
+      const key = asString(decision.key) ?? id
+      const title = asString(decision.title) ?? (decision.source === 'backlog' ? asString(decision.summary) : null) ?? humanTitle(id)
+      const detail = asString(decision.report_path) ?? detailIn(asString(decision.reason) ?? '') ?? detailIn(asString(decision.summary) ?? '')
+      const home = asString(mate.home)
+      for (const url of (asString(decision.summary) ?? '').match(/https:\/\/github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/pull\/\d+/g) ?? []) addPr(id, url, [])
+      addDecision(scope, id, decision.verb === 'captain-hold' ? 'hold' : key, title,
+        detail !== null && detail.startsWith('data/') && home !== null ? `${home}/${detail}` : detail ?? (home === null ? null : (decision.source === 'status' ? `${home}/state/${id}.status` : `${home}/data/backlog.md`)))
+    }
+  }
   for (const entry of asArray(snapshot.tasks)) {
     const task = asRecord(entry)
     const id = asString(task.id)
     if (id === null) continue
-    const url = asString(asRecord(task.pr).url)
-    const parsed = url === null ? null : parsePrUrl(url)
-    if (url !== null && parsed !== null && !seen.has(url)) {
-      seen.add(url)
-      const waitsOn = asArray(asRecord(task.backlog).unresolved_blocker_ids).filter(
-        (one): one is string => typeof one === 'string',
-      )
-      prs.push({ task: id, url, ...parsed, waitsOn })
-    }
+    const backlog = asRecord(task.backlog)
+    const pr = asRecord(task.pr)
+    for (const url of [pr.url, ...asArray(pr.urls)]) addPr(id, url, backlog.unresolved_blocker_ids, backlog.title)
     const report = asRecord(asRecord(task.paths).report)
     const ownReport = report.present === true ? asString(report.path) : null
     for (const open of asArray(asRecord(task.hints).open_decisions)) {
       const decision = asRecord(open)
       if (decision.verb !== 'needs-decision') continue
       const summary = asString(decision.summary) ?? ''
-      decisions.push({ ...decisionText(id, summary), report: reportIn(summary) ?? ownReport })
+      const held = /^captain hold ([A-Za-z0-9._-]+):/.exec(summary.trim())?.[1]
+      const key = asString(decision.key) ?? 'default'
+      const detail = detailIn(summary) ?? ownReport ?? asString(asRecord(asRecord(task.paths).status_log).path)
+      const home = asString(mates.get(id)?.home) ?? (task.kind === 'secondmate' ? asString(asRecord(asRecord(task.paths).home).path) : null)
+      const resolvedDetail = detail !== null && detail.startsWith('data/') && home !== null ? `${home}/${detail}` : detail
+      if (held !== undefined) {
+        addDecision(id, held, 'hold', humanTitle(held), resolvedDetail)
+      } else {
+        const title = asString(decision.title) ?? (key === 'default' ? asString(backlog.title) ?? id : humanTitle(key))
+        addDecision('', id, key, title, resolvedDetail)
+      }
     }
   }
   for (const entry of asArray(asRecord(snapshot.backlog).records)) {
     const record = asRecord(entry)
-    if (record.captain_actionable !== true) continue
     const id = asString(record.id) ?? 'backlog'
-    const summary = asString(record.title) ?? asString(record.hold_reason) ?? ''
-    decisions.push({ label: id, summary: summary.replace(/\s+/g, ' ').trim(), report: asString(record.report_path) })
+    for (const url of [record.pr_url, ...asArray(record.links)]) addPr(id, url, record.unresolved_blocker_ids, record.title)
+    if (record.captain_actionable !== true) continue
+    addDecision('', id, 'hold', asString(record.title) ?? humanTitle(id), asString(record.report_path) ?? detailIn(asString(record.hold_reason) ?? '') ?? asString(asRecord(snapshot.backlog).path))
   }
   return { prs, decisions }
+}
+
+// Historical task logs retain merged PRs. Discover state cheaply before asking
+// for expensive check contexts and branch rules on the open subset only.
+export function prStateQuery(refs: readonly PrRef[]): string {
+  return `query { ${refs.map((ref, i) => `p${i}: repository(owner:${JSON.stringify(ref.owner)}, name:${JSON.stringify(ref.repo)}) { pullRequest(number:${ref.number}) { title state } }`).join(' ')} }`
 }
 
 // One GraphQL query for every pull request: each is aliased p<index>, so a
@@ -272,13 +344,13 @@ export function blockersOf(status: PrStatus, waitsOn: readonly string[] = []): s
 // from GitHub it still shows, saying its status is unknown.
 export function prRow(ref: PrRef, status: PrStatus | undefined): PrRow | null {
   if (status === undefined) {
-    return { url: ref.url, project: ref.repo, title: ref.task, checks: 'status unknown', blockers: ['GitHub did not answer'] }
+    return { url: ref.url, project: ref.repo, title: shortLine(ref.title ?? ref.task), checks: 'status unknown', blockers: ['GitHub did not answer'] }
   }
   if (status.state !== 'OPEN') return null
   return {
     url: ref.url,
     project: ref.repo,
-    title: status.title || ref.task,
+    title: shortLine(status.title || ref.title || ref.task),
     checks: checkSummary(status),
     blockers: blockersOf(status, ref.waitsOn),
   }
@@ -296,26 +368,4 @@ export function clock(ms: number): string {
   const at = new Date(ms)
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${pad(at.getHours())}:${pad(at.getMinutes())}`
-}
-
-// Splits text into the spans of the lines it wraps to: the first fits `first`
-// cells and each later one `rest`. Breaks fall at spaces, which the break
-// drops; a word longer than a line, such as a URL, is split inside so no line
-// runs past the pane's edge. Each span is [start, end) into text.
-export function wrapSpans(text: string, first: number, rest: number = first): [number, number][] {
-  const spans: [number, number][] = []
-  let start = 0
-  while (start < text.length) {
-    const width = Math.max(1, spans.length === 0 ? first : rest)
-    if (text.length - start <= width) {
-      spans.push([start, text.length])
-      break
-    }
-    const room = text.lastIndexOf(' ', start + width)
-    const end = room > start ? room : start + width
-    spans.push([start, end])
-    start = end
-    while (text[start] === ' ') start++
-  }
-  return spans.length === 0 ? [[0, 0]] : spans
 }
