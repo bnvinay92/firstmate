@@ -83,6 +83,21 @@ assert_not_contains "$(head -n 1 "$home/gh.log")" "statusCheckRollup" "the state
 assert_equals "3" "$(sed -n 2p "$home/gh.log" | grep -o 'pullRequest(number:' | wc -l | tr -d ' ')" "the checks query covers only the open ones"
 pass "pull request rows: inventory, dedupe, blockers, and the two-query read"
 
+# A read runs beside the live view, so its commands must never read the view's
+# keyboard: a stand-in gh that reads stdin gets nothing even with keys waiting.
+cat > "$home/fakebin/gh" <<'SH'
+#!/usr/bin/env bash
+if IFS= read -r -t 2 stolen; then printf '%s\n' "$stolen" >> "$FM_TEST_GH_LOG.stdin"; fi
+case "$*" in
+  *statusCheckRollup*) cat "$FM_TEST_GH_CHECKS" ;;
+  *) cat "$FM_TEST_GH_STATES" ;;
+esac
+SH
+printf 'd\ny\nd\ny\n' > "$home/keys"
+render "$home" --snapshot "$home/snapshot.json" < "$home/keys" >/dev/null || fail "render failed"
+[ ! -s "$home/gh.log.stdin" ] || fail "a GitHub read took keys meant for the view: $(cat "$home/gh.log.stdin")"
+pass "a read never takes the view's keys"
+
 # --- required checks decide what blocks --------------------------------------
 
 home=$(make_home checks)
@@ -178,6 +193,131 @@ printf 'not json' > "$home/snapshot.json"
 out=$(render "$home" --snapshot "$home/snapshot.json") || fail "render failed"
 assert_contains "$out" "The task records could not be read just now." "a failed read says so"
 pass "a failed read says what could not be read"
+
+# --- pull requests expand to what blocks them and what to do next -----------
+
+home=$(make_home pr-expand)
+cat > "$home/fakebin/open" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FM_TEST_OPEN_LOG"
+SH
+chmod +x "$home/fakebin/open"
+cp "$home/fakebin/open" "$home/fakebin/xdg-open"
+jq -n --arg u1 "$(url 21)" --arg u2 "$(url 22)" '{
+  schema: "fm-fleet-snapshot.v1", tasks: [{id: "red", pr: {url: $u1}}, {id: "green", pr: {url: $u2}}]
+}' > "$home/snapshot.json"
+log_url="https://github.com/example/app/actions/runs/5/job/6"
+red_checks=".commits.nodes[0].commit.statusCheckRollup.contexts.nodes += [
+  {__typename: \"CheckRun\", name: \"lint\", status: \"COMPLETED\", conclusion: \"FAILURE\", detailsUrl: \"$log_url\", isRequired: true},
+  {__typename: \"CheckRun\", name: \"e2e\", status: \"IN_PROGRESS\", conclusion: null, isRequired: false}]"
+jq -n --argjson a "$(pr_answer A OPEN)" '{data: {p0: {pullRequest: $a}, p1: {pullRequest: $a}}}' > "$home/gh-states.json"
+jq -n --argjson a "$(pr_answer 'Red change' OPEN "$red_checks")" --argjson b "$(pr_answer 'Green change' OPEN)" \
+  '{data: {p0: {pullRequest: $a}, p1: {pullRequest: $b}}}' > "$home/gh-checks.json"
+pr_render() { FM_TEST_OPEN_LOG="$home/open.log" render "$home" --snapshot "$home/snapshot.json" --width 100 "$@"; }
+out=$(pr_render --select 1) || fail "render failed"
+assert_contains "$out" "> ▸ app: Red change · 1 failing, 1 running · a failing check"$'\n' "a collapsed pull request is one line"
+assert_not_contains "$out" "Keeps it from merging" "a collapsed pull request shows no detail"
+out=$(pr_render --select 1 --key enter) || fail "render failed"
+assert_contains "$out" "> ▾ app: Red change" "Enter expands the pull request"
+assert_contains "$out" "    Keeps it from merging: a failing check." "the expansion leads with what blocks it"
+assert_contains "$out" "    Failing: lint (required)" "it names the failing check"
+assert_contains "$out" "    Log of lint:"$'\n'"    $log_url" "it shows the failing check's log link"
+assert_contains "$out" "    Running: e2e" "it names the running check"
+assert_contains "$out" "    $(url 21)" "it shows the pull request link"
+assert_contains "$out" "o open it in the browser · g open the failing check's log · f ask for a fix · c close" "a red pull request offers open, log, fix, and close"
+assert_not_contains "$out" "m merge" "a red pull request is never offered a merge"
+[ ! -e "$home/open.log" ] || fail "Enter on a pull request opens nothing"
+out=$(pr_render --select 1 --key enter --key enter) || fail "render failed"
+assert_contains "$out" "> ▸ app: Red change" "Enter again collapses it"
+out=$(pr_render --select 1 --key m) || fail "render failed"
+assert_contains "$out" "Merge is offered only once nothing keeps it from merging." "m on a red pull request stages nothing"
+assert_not_contains "$out" "[merge]" "no merge is staged on a red pull request"
+out=$(pr_render --select 1 --key c) || fail "render failed"
+assert_contains "$out" "[close] app: Red change" "c stages a close"
+assert_contains "$out" "Staged: close it without merging. u unstages; s submits everything staged." "the staged close is spelled out"
+pr_render --select 1 --key o --key g >/dev/null || fail "render failed"
+assert_equals "$(url 21)"$'\n'"$log_url" "$(cat "$home/open.log")" "o opens the pull request and g its failing check's log, at once"
+out=$(pr_render --select 2 --key enter) || fail "render failed"
+assert_contains "$out" "    Ready - waiting for your word to merge." "a ready pull request says so first"
+assert_contains "$out" "o open it in the browser · m merge · c close" "a ready pull request offers merge"
+pass "Enter expands a pull request to its blocker, check names and logs, and its actions; o and g open at once"
+
+# --- staged answers, one submit, one note -------------------------------------
+
+command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found"; exit 0; }
+home=$(make_home batch)
+hold_in() { FM_HOME="$home" "$ROOT/bin/fm-captain-hold.sh" hold "$1" --title "$2" --repo sample --reason "$3" >/dev/null || fail "holding $1 failed"; }
+hold_in q-a "First call?" "Pick a. Rec: yes."
+hold_in q-b "Second call?" "Pick b. Rec: no."
+hold_in q-c "Third call?" "Pick c. Rec: later."
+batch_render() { render "$home" --width 100 "$@"; }
+out=$(batch_render --key y --key down --key d --key down --key a --type "after the model" --key enter) || fail "render failed"
+assert_contains "$out" "[answer] q-a: First call?" "y stages the recommendation and tags the row"
+assert_contains "$out" "[drop] q-b: Second call?" "d stages a drop on a collapsed decision"
+assert_contains "$out" "[answer] q-c: Third call?" "a stages a typed answer"
+assert_contains "$out" 'Staged: answer "after the model". u unstages; s submits everything staged.' "the expanded row says what is staged"
+assert_contains "$out" "Enter expands · s submits 3 staged · q quits." "the footer names the submit key and the count"
+assert_equals "0" "$(find "$home/state/inbox" -name '*.note' 2>/dev/null | wc -l | tr -d ' ')" "staging records nothing"
+out=$(batch_render --key y --key y --key u) || fail "render failed"
+assert_not_contains "$out" "[answer]" "u lets go of a staged answer"
+out=$(batch_render --key d --key y) || fail "render failed"
+assert_contains "$out" "[answer] q-a" "staging again changes the staged answer"
+out=$(batch_render --key d --key q) || fail "render failed"
+assert_contains "$out" "Quitting lets go of 1 staged answer, which Firstmate never sees. q again quits; s submits them." "q warns before letting staged answers go"
+out=$(batch_render --key d --key s) || fail "render failed"
+assert_contains "$out" "Submit 1 staged answer to Firstmate in one note?  y yes · n no" "s asks once to confirm"
+out=$(batch_render --key d --key s --key n) || fail "render failed"
+assert_contains "$out" "[drop] q-a" "n keeps the answers staged"
+assert_equals "0" "$(find "$home/state/inbox" -name '*.note' 2>/dev/null | wc -l | tr -d ' ')" "a cancelled submit records nothing"
+out=$(batch_render --key d --key down --key down --key a --type "after the model" --key enter --key up --key s --key y) \
+  || fail "render failed"
+assert_contains "$out" "Passed 2 answers on in one note; Firstmate is told." "the submit reports one note"
+assert_contains "$out" "Decisions waiting for you (1)" "answers passed on leave the list at once, before the next read"
+assert_contains "$out" "> ▸ q-b: Second call?" "the selection stays on the same decision when the list above it shrinks"
+assert_not_contains "$out" "q-a:" "the dropped decision is gone"
+assert_equals "1" "$(find "$home/state/inbox" -name '*.note' | wc -l | tr -d ' ')" "one note for the batch"
+assert_equals "1" "$(grep -c check "$home/state/.wake-queue")" "one wake for the batch"
+body=$(cat "$home"/state/inbox/*.note)
+assert_contains "$body" "Answers submitted together through the fleet pane; act on each:" "the note comes from the view"
+assert_contains "$body" "- Decision q-a dropped" "the note carries the drop"
+assert_contains "$body" "- Decision q-c resolved (recorded; the call is closed). Answer: after the model" "the note carries the typed answer"
+assert_contains "$(FM_HOME="$home" "$ROOT/bin/fm-captain-hold.sh" open q-b; echo "rc=$?")" "rc=0" "the unstaged decision still waits"
+pass "answers are staged, changed, and submitted together in one note, and leave the list at once"
+
+# --- pull request actions ride the same batch ---------------------------------
+
+home=$(make_home mixed)
+hold_in() { FM_HOME="$home" "$ROOT/bin/fm-captain-hold.sh" hold "$1" --title "$2" --repo sample --reason "$3" >/dev/null || fail "holding $1 failed"; }
+hold_in q-a "First call?" "Pick a."
+jq -n --arg u1 "$(url 31)" --arg u2 "$(url 32)" '{
+  schema: "fm-fleet-snapshot.v1", tasks: [{id: "red", pr: {url: $u1}}, {id: "green", pr: {url: $u2}}],
+  backlog: {records: [
+    {id: "q-a", title: "First call?", captain_actionable: true, hold_reason: "Pick a."},
+    {id: "q-gone", title: "Answered elsewhere?", captain_actionable: true, hold_reason: "Pick."}]}
+}' > "$home/snapshot.json"
+jq -n --argjson a "$(pr_answer A OPEN)" '{data: {p0: {pullRequest: $a}, p1: {pullRequest: $a}}}' > "$home/gh-states.json"
+jq -n --argjson a "$(pr_answer 'Red change' OPEN "$red_checks")" --argjson b "$(pr_answer 'Green change' OPEN)" \
+  '{data: {p0: {pullRequest: $a}, p1: {pullRequest: $b}}}' > "$home/gh-checks.json"
+mixed_render() { render "$home" --snapshot "$home/snapshot.json" --width 120 "$@"; }
+out=$(mixed_render --select 3 --key d --key down --key d --key s --key y) || fail "render failed"
+assert_contains "$out" "Nothing was passed on; the answers stay staged." "a refused line passes nothing on"
+assert_contains "$out" "q-gone: this home's backlog has no task q-gone" "the refused decision is named"
+assert_contains "$out" "q-a: not recorded, because another line in this batch was refused" "the good one is reported unrecorded"
+assert_contains "$out" "[drop] q-a" "the good answer stays staged"
+assert_contains "$out" "[drop] q-gone" "the refused answer stays staged to change"
+assert_equals "0" "$(find "$home/state/inbox" -name '*.note' 2>/dev/null | wc -l | tr -d ' ')" "a refused batch writes no note"
+assert_contains "$(FM_HOME="$home" "$ROOT/bin/fm-captain-hold.sh" open q-a; echo "rc=$?")" "rc=0" "a refused batch records nothing"
+out=$(mixed_render --select 1 --key f --type "rerun lint" --key enter --key down --key m --key down --key y --key s --key y) \
+  || fail "render failed"
+assert_contains "$out" "Passed 3 answers on in one note; Firstmate is told." "decision answers and pull request actions submit together"
+assert_contains "$out" "[fix sent] app: Red change" "a pull request passed on is tagged sent"
+assert_contains "$out" "[merge sent] app: Green change" "the merge is tagged sent"
+body=$(cat "$home"/state/inbox/*.note)
+assert_contains "$body" "- Pull request $(url 31): have its worker fix what keeps it from merging (failing checks, conflicts, review comments). Note: rerun lint" "the note carries the fix and its note"
+assert_contains "$body" "- Pull request $(url 32): merge it." "the note carries the merge"
+assert_contains "$body" "- Decision q-a resolved" "the note carries the decision"
+assert_equals "1" "$(find "$home/state/inbox" -name '*.note' | wc -l | tr -d ' ')" "one note for decisions and pull requests together"
+pass "merge, fix, and close stage into the same batch, and a refused line keeps everything staged"
 
 # --- opening the pane in Herdr -----------------------------------------------
 
