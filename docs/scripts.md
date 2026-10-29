@@ -19,7 +19,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-fleet-ledger.sh`     | Append the opt-in fleet activity ledger's records ([contract](fleet-ledger.md))      |
 | `fm-fleet-view.sh`       | Render the fleet snapshot as a human Markdown view                                   |
 | `fm-fleet-pane.py`       | The fleet pane: a live terminal view of open pull requests and decisions waiting for the captain, and its Herdr pane opener ([guide](fleet-pane.md)) |
-| `fm-decision.sh`         | Resolve or drop a decision waiting for the captain: record the answer through fm-captain-hold.sh and wake Firstmate |
+| `fm-decision.sh`         | Resolve or drop a decision waiting for the captain, or pass a batch of answers and pull request actions on: record answers through fm-captain-hold.sh and wake Firstmate once |
 | `fm-bearings-snapshot.sh` | Project the bounded remote-ledger fleet snapshot to compact TOON; `--include-prs` adds live GitHub enrichment |
 | `fm-bearings-board.sh`   | Build and arm the stable interactive `/bearings lavish` fleet board                  |
 | `fm-secondmate-reconcile.sh` | Queue Bearings reconcile requests for later supervision delivery and ask each mismatched home through its durable inbox with a per-home cooldown |

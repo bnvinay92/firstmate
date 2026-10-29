@@ -140,3 +140,64 @@ run_in "$home" fm-decision.sh resolve q-three "the first" >/dev/null || fail "th
 expect_code 1 "$(code_of run_in "$home" fm-decision.sh resolve q-three "the first")" "fm-decision.sh resolve q-three the first"
 assert_equals "1" "$(note_count "$home")" "repeating an answer neither records nor wakes twice"
 pass "unknown, unheld, already answered, and malformed requests are refused without a record"
+
+# --- a batch records every answer and wakes Firstmate once ------------------
+
+PR=https://github.com/example/app/pull/7
+home=$(make_home batch)
+hold "$home" q-a "Pick a? Rec: yes." --title "Pick a?"
+hold "$home" q-b "Pick b? Rec: no." --title "Pick b?"
+(cd "$home" && tasks-axi add work-b "Build the board" --kind ship --repo sample >/dev/null) \
+  || fail "adding the work item failed"
+hold "$home" work-b "Start the board? Rec: yes."
+out=$(printf 'resolve q-a Go with the recommendation.\n\ndrop q-b\nresolve work-b yes, start it\nmerge %s\nfix https://github.com/example/app/pull/8 rebase onto main\nclose https://github.com/example/app/pull/9\n' "$PR" \
+  | run_in "$home" fm-decision.sh batch --source "a test") || fail "the batch should succeed: $out"
+assert_contains "$out" "resolved: q-a (recorded; the call is closed)" "the batch reports the resolved question"
+assert_contains "$out" "dropped: q-b (recorded; the call is closed)" "the batch reports the drop"
+assert_contains "$out" "resolved: work-b (recorded; the hold is lifted" "the batch releases held work"
+assert_contains "$out" "merge: $PR (passed to Firstmate)" "the batch reports the merge"
+assert_contains "$out" "Firstmate is told: one note for 6 answers" "the batch names its one note"
+assert_contains "$(show "$home" q-a)" "state: done" "the batched question closes"
+assert_contains "$(show "$home" q-b)" "Drop this." "the batched drop is recorded"
+assert_contains "$(show "$home" work-b)" "held: no" "the batched release lifts the hold"
+assert_equals "1" "$(note_count "$home")" "one note for the whole batch"
+assert_equals "1" "$(grep -c check "$home/state/.wake-queue")" "one check wake for the whole batch"
+body=$(notes "$home")
+assert_contains "$body" "Answers submitted together through a test; act on each:" "the note names the source"
+assert_contains "$body" "- Decision q-a resolved (recorded; the call is closed). Answer: Go with the recommendation." "the note lists the question and its answer"
+assert_contains "$body" "- Decision q-b dropped" "the note lists the drop"
+assert_contains "$body" "- Decision work-b resolved (recorded; the hold is lifted for Firstmate to act on the answer). Answer: yes, start it" "the note lists the released work"
+assert_contains "$body" "- Pull request $PR: merge it." "the note carries the merge"
+assert_contains "$body" "guarded merge path" "the merge goes through the guarded path"
+assert_contains "$body" "- Pull request https://github.com/example/app/pull/8: have its worker fix" "the note carries the fix"
+assert_contains "$body" "Note: rebase onto main" "the fix keeps the captain's note"
+assert_contains "$body" "- Pull request https://github.com/example/app/pull/9: close it without merging." "the note carries the close"
+pass "a batch records every answer and raises one wake with one note"
+
+# --- one refused line refuses the whole batch, recording nothing -------------
+
+home=$(make_home batch-refuse)
+hold "$home" q-c "Pick c?" --title "Pick c?"
+hold "$home" q-d "Pick d?" --title "Pick d?"
+before=$(cat "$home/data/backlog.md")
+rc=0
+err=$(printf 'drop q-c\nresolve nobody yes\nresolve q-d the second\n' | run_in "$home" fm-decision.sh batch 2>&1 >/dev/null) || rc=$?
+expect_code 1 "$rc" "a batch naming an unknown task"
+assert_contains "$err" "nobody: this home's backlog has no task nobody" "the refused line is named"
+assert_contains "$err" "q-c: not recorded, because another line in this batch was refused" "the good lines are reported as not recorded"
+assert_contains "$err" "q-d: not recorded" "every good line is reported"
+assert_equals "$before" "$(cat "$home/data/backlog.md")" "nothing is recorded"
+assert_equals "0" "$(note_count "$home")" "no note is written"
+rc=0
+err=$(printf 'drop q-c\nmerge https://example.org/x\ndrop q-c\nreopen q-d\n' | run_in "$home" fm-decision.sh batch 2>&1 >/dev/null) || rc=$?
+expect_code 2 "$rc" "a malformed batch"
+assert_contains "$err" "https://example.org/x: merge needs a GitHub pull request URL" "a bad pull request link is refused"
+assert_contains "$err" "q-c: named twice in this batch" "a repeated target is refused"
+assert_contains "$err" "reopen: not a batch verb" "an unknown verb is refused"
+expect_code 2 "$(printf '\n\n' | code_of run_in "$home" fm-decision.sh batch)" "an empty batch"
+expect_code 2 "$(printf 'drop q-c\n' | code_of run_in "$home" fm-decision.sh batch extra)" "a batch with arguments"
+assert_equals "$before" "$(cat "$home/data/backlog.md")" "no malformed batch records anything"
+assert_equals "0" "$(note_count "$home")" "no malformed batch writes a note"
+out=$(printf 'drop q-c\n' | run_in "$home" fm-decision.sh batch) || fail "a one-line batch should succeed"
+assert_contains "$out" "Firstmate is told: one note for 1 answer" "a one-line batch passes on"
+pass "a batch is checked whole before anything is recorded, and every line is reported"

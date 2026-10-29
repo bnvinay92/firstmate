@@ -4,11 +4,28 @@
 A terminal view any agent's firstmate session can sit beside, usually as a Herdr
 pane. It lists every open pull request recorded in this home with its checks
 and what keeps it from merging, and every decision waiting for the captain.
-A decision is one line; Enter expands it to its full title, its decision text,
-and the path of its report or plan, wrapped to the pane, and Enter collapses it.
-From an expanded decision held in this home's backlog, the captain can resolve
-or drop it; both run bin/fm-decision.sh, the one command that records the
-answer and wakes Firstmate. Everything else the view does is read-only.
+Every row is one line; Enter expands it and Enter collapses it. An expanded
+decision shows its full title, its decision text, and the path of its report or
+plan, wrapped to the pane. An expanded pull request leads with what keeps it
+from merging (or that it is ready), the names of its failing and running checks
+with each failing check's log link, and the keys for what is usually done next.
+
+Answers are staged, then submitted together. On a decision held in this home's
+backlog, y, a, and d stage an answer; on a pull request, m (offered only once
+nothing keeps it from merging), f, and c stage a merge, a fix request, or a
+close. A staged row is tagged with what it carries, the captain keeps moving
+and staging, changes a staged answer by staging another or lets it go with u,
+and s submits every staged answer after one y. The submission runs
+bin/fm-decision.sh batch once in the background: every line is checked before
+anything is recorded, and one note raises one Firstmate wake for the whole
+batch. Answers passed on leave the list at once, and the list keeps the
+selection on the same item when a read changes it. Staged answers live only in
+this view until submitted: quitting asks for a second q and then lets them go,
+and a staged row that stops being listed is let go with a notice. Opening a
+pull request, a check log, or a document happens at once, because it changes
+nothing. Merge, fix, and close only ask Firstmate, which merges through its
+guarded merge path; the view itself never merges, fixes, or closes anything,
+and everything else it does is read-only.
 
 Usage:
   fm-fleet-pane.py [view]
@@ -19,20 +36,31 @@ Usage:
       command already opened there is reused rather than doubled.
   fm-fleet-pane.py render [--snapshot <file>] [--width <columns>]
                           [--expand <n>]... [--select <n>]
+                          [--key <key>]... [--type <text>]...
       Read once and print one frame as plain text: the test and debugging entry
       point. --snapshot reads a saved `fm-fleet-snapshot.sh --json` instead of
       running it; --expand and --select name items by their 1-based position.
+      --key presses one key (a character, or enter, space, esc, backspace, up,
+      down, left, right) and --type types each character of <text>, in order,
+      through the live view's own key handling; a submission they start is
+      waited for before the next key.
 
 Keys in the view:
   Up/Down or k/j    move between items
-  Enter, Space      expand or collapse the selected decision
+  Enter, Space      expand or collapse the selected item
   Right / Left      expand / collapse it
-  y                 resolve it with the recommendation (asks to confirm)
-  a                 type an answer, Enter to review it (asks to confirm)
-  d                 drop it (asks to confirm)
-  o                 open its report or plan, or the pull request, on this machine
+  y                 stage the recommendation as a decision's answer
+  a                 type a decision's answer, Enter to stage it
+  d                 stage dropping a decision
+  m                 stage merging a pull request that is ready
+  f                 stage asking for a pull request's fix, with an optional note
+  c                 stage closing a pull request without merging
+  u                 let go of the selected item's staged answer
+  s                 submit every staged answer in one note (asks to confirm)
+  o                 open the pull request, or a decision's report or plan
+  g                 open a pull request's first failing check log
   r                 read again now
-  q                 quit
+  q                 quit (asks again while answers are staged)
 
 Reading: bin/fm-fleet-snapshot.sh owns the records. The view runs it with its
 forge fallback off and its remote-summary cache pointed at a path that can
@@ -41,9 +69,11 @@ asked in two batched `gh api graphql` queries - a lightweight state read for
 every recorded pull request, then checks and branch rules for the open subset -
 at most about once a minute unless the list of pull requests changed. A failed
 read keeps the last rows on screen and says what could not be read.
+Every command the view runs gets its own input, never the view's terminal, so
+a read or a submission running beside the view never takes the captain's keys.
 
-Opening a document runs the system opener (`open`, else `xdg-open`) on the path
-or link, because a terminal such as macOS Terminal draws no clickable links.
+Opening runs the system opener (`open`, else `xdg-open`) on the path or link,
+because a terminal such as macOS Terminal draws no clickable links.
 
 Environment: FM_HOME selects the home (default: the code root); FM_HERDR_BIN
 names the Herdr executable `open` runs (default: herdr).
@@ -273,8 +303,8 @@ def pr_query(refs):
         return ("title state isDraft mergeable mergeStateStatus reviewDecision baseRef{branchProtectionRule{requiredStatusCheckContexts} "
                 "rules(first:100){nodes{type parameters{... on RequiredStatusChecksParameters{requiredStatusChecks{context}}}}}} "
                 "commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename "
-                "... on CheckRun{name status conclusion isRequired(pullRequestNumber:%d)} "
-                "... on StatusContext{context state isRequired(pullRequestNumber:%d)}}}}}}}" % (n, n))
+                "... on CheckRun{name status conclusion detailsUrl isRequired(pullRequestNumber:%d)} "
+                "... on StatusContext{context state targetUrl isRequired(pullRequestNumber:%d)}}}}}}}" % (n, n))
     parts = ["p%d: repository(owner:%s, name:%s) { pullRequest(number:%d) { %s } }"
              % (i, json.dumps(ref["owner"]), json.dumps(ref["repo"]), ref["number"], fields(ref["number"])) for i, ref in enumerate(refs)]
     return "query { %s }" % " ".join(parts)
@@ -326,7 +356,8 @@ def parse_pr_statuses(text, refs):
             continue
         named = required_contexts(pr.get("baseRef"), "p%d" % i in rules_failed)
         unreported = set(named or ())
-        checks = dict(passing=0, failing=0, running=0, failing_required=0, running_required=0, missing_required=0, required="none")
+        checks = dict(passing=0, failing=0, running=0, failing_required=0, running_required=0, missing_required=0, required="none",
+                      failed=[], ran=[])
         nodes = as_list(as_record(pr.get("commits")).get("nodes"))
         commit = as_record(as_record(nodes[0] if nodes else None).get("commit"))
         for node in as_list(as_record(as_record(commit.get("statusCheckRollup")).get("contexts")).get("nodes")):
@@ -342,12 +373,16 @@ def parse_pr_statuses(text, refs):
                 word = as_text(check.get("state")) or ""
             else:
                 word = as_text(check.get("conclusion") if check.get("status") == "COMPLETED" else check.get("status")) or ""
+            link = as_text(check.get("targetUrl") if is_status else check.get("detailsUrl"))
+            link = link if link is not None and link.startswith("https://") else None
             if word in FAILED:
                 checks["failing"] += 1
                 checks["failing_required"] += 1 if is_required else 0
+                checks["failed"].append({"name": short_line(name or "a check", 60), "url": link, "required": is_required})
             elif word in RUNNING:
                 checks["running"] += 1
                 checks["running_required"] += 1 if is_required else 0
+                checks["ran"].append(short_line(name or "a check", 60))
             else:
                 checks["passing"] += 1
         if named is None:
@@ -414,12 +449,16 @@ def blockers_of(status, waits_on=()):
 def pr_row(ref, status):
     """A pull request's row, or None once it merged or closed."""
     if status is None:
-        return {"url": ref["url"], "project": ref["repo"], "title": short_line(ref.get("title") or ref["task"]),
-                "checks": "status unknown", "blockers": ["GitHub did not answer"]}
+        title = ref.get("title") or ref["task"]
+        return {"url": ref["url"], "project": ref["repo"], "title": short_line(title), "full_title": full_text(title, 500),
+                "checks": "status unknown", "blockers": ["GitHub did not answer"], "ready": False, "failed": [], "running": []}
     if status["state"] != "OPEN":
         return None
-    return {"url": ref["url"], "project": ref["repo"], "title": short_line(status["title"] or ref.get("title") or ref["task"]),
-            "checks": check_summary(status), "blockers": blockers_of(status, ref["waits_on"])}
+    title = status["title"] or ref.get("title") or ref["task"]
+    blockers = blockers_of(status, ref["waits_on"])
+    return {"url": ref["url"], "project": ref["repo"], "title": short_line(title), "full_title": CONTROLS.sub(" ", full_text(title, 500)),
+            "checks": check_summary(status), "blockers": blockers, "ready": blockers[0].startswith("ready"),
+            "failed": status["checks"]["failed"], "running": status["checks"]["ran"]}
 
 
 def is_github_due(refs, asked, now):
@@ -451,20 +490,20 @@ class Reader:
             with open(self.snapshot_file, encoding="utf-8") as handle:
                 return handle.read()
         env = dict(os.environ, FM_HOME=self.home, **SNAPSHOT_ENV)
-        ran = subprocess.run([SNAPSHOT_SCRIPT, "--json"], env=env, capture_output=True, text=True, timeout=90, check=False)
+        ran = subprocess.run([SNAPSHOT_SCRIPT, "--json"], env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=90, check=False)
         return ran.stdout
 
     def _ask_github(self, refs, now):
         if not is_github_due(refs, self.asked, now):
             return None
         query = ["gh", "api", "graphql", "-f"]
-        ran = subprocess.run(query + ["query=" + pr_state_query(refs)], capture_output=True, text=True, timeout=20, check=False)
+        ran = subprocess.run(query + ["query=" + pr_state_query(refs)], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20, check=False)
         known = parse_pr_statuses(ran.stdout, refs)
         open_refs = [ref for ref in refs if known.get(ref["url"], {}).get("state") == "OPEN"]
         closed = {url: status for url, status in known.items() if status["state"] != "OPEN"}
         found = {}
         if open_refs:
-            ran = subprocess.run(query + ["query=" + pr_query(open_refs)], capture_output=True, text=True, timeout=20, check=False)
+            ran = subprocess.run(query + ["query=" + pr_query(open_refs)], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20, check=False)
             found = parse_pr_statuses(ran.stdout, open_refs)
         self.asked = {"urls": " ".join(ref["url"] for ref in refs), "at": now}
         self.statuses = dict(closed, **found)
@@ -493,16 +532,41 @@ class Reader:
 
 # --- drawing ---------------------------------------------------------------
 
-def items_of(reader):
-    return [("pr", pr) for pr in reader.prs] + [("decision", one) for one in reader.decisions]
+def key_of(kind, item):
+    """An item's identity across reads: a pull request's URL or a decision's id."""
+    return item["url"] if kind == "pr" else item["id"]
+
+
+def items_of(reader, ui=None):
+    """The listed items, without decisions already passed on from this view."""
+    sent = ui["sent"] if ui is not None else {}
+    return [("pr", pr) for pr in reader.prs] + [("decision", one) for one in reader.decisions if one["id"] not in sent]
 
 
 def document_target(report, home):
     return "%s/%s" % (home, report) if report.startswith("data/") else report
 
 
+STAGED_TAG = {"resolve": "answer", "drop": "drop", "merge": "merge", "fix": "fix", "close": "close"}
+
+
+def staged_words(entry):
+    verb, answer = entry["verb"], entry["answer"]
+    if verb == "resolve":
+        return "take the recommendation" if answer == RECOMMENDED else 'answer "%s"' % answer
+    if verb == "fix":
+        return "ask for a fix" + (' - "%s"' % answer if answer else "")
+    return {"drop": "drop it", "merge": "merge it", "close": "close it without merging"}[verb]
+
+
 def frame(reader, ui, width):
     """The view's lines, each (text, style, item index or None), never wider than width."""
+    body, foot = frame_parts(reader, ui, width)
+    return body + foot
+
+
+def frame_parts(reader, ui, width):
+    """The scrolling list and the prompt, notice, and footer lines pinned under it."""
     width = max(width, 20)
     lines = []
 
@@ -517,57 +581,91 @@ def frame(reader, ui, width):
 
     if reader.at is None:
         add(reader.problem or "Reading pull requests and decisions...")
-        return lines
-    items = items_of(reader)
+        return lines, []
+    items = items_of(reader, ui)
+    decisions = [item for kind, item in items if kind == "decision"]
     add("Open pull requests (%d)" % len(reader.prs), "head")
     if not reader.prs:
         add("None open.", prefix="  ")
-    add_index = 0
-    for kind, item in items:
-        if kind == "decision" and add_index == len(reader.prs):
-            add("Decisions waiting for you (%d)" % len(reader.decisions), "head")
-        index = add_index
-        add_index += 1
-        marker = "> " if ui["selected"] == index else "  "
+    for index, (kind, item) in enumerate(items):
+        if kind == "decision" and index == len(reader.prs):
+            add("Decisions waiting for you (%d)" % len(decisions), "head")
+        key = key_of(kind, item)
+        is_open = key in ui["open"]
+        staged, sending, sent = ui["staged"].get(key), ui["inflight"].get(key), ui["sent"].get(key)
+        tag = ("[%s] " % STAGED_TAG[staged["verb"]] if staged else "[sending] " if sending else
+               "[%s sent] " % sent if sent else "")
+        marker = ("> " if ui["selected"] == index else "  ") + ("▾ " if is_open else "▸ ")
         if kind == "pr":
-            style = "ready" if item["blockers"][0].startswith("ready") else "wait"
-            add("%s: %s · %s · %s" % (item["project"], item["title"], item["checks"], "; ".join(item["blockers"])), style, index, marker)
-            continue
-        is_open = item["id"] in ui["open"]
-        add("%s: %s" % (item["label"], item["summary"]), "decision", index, marker + ("▾ " if is_open else "▸ "))
+            style = "ready" if item["ready"] else "wait"
+            add("%s%s: %s · %s · %s" % (tag, item["project"], item["title"], item["checks"], "; ".join(item["blockers"])),
+                style, index, marker)
+        else:
+            add("%s%s: %s" % (tag, item["label"], item["summary"]), "decision", index, marker)
         if not is_open:
             continue
-        wrap(item["title"], "title")
-        wrap(item["detail"] or "No decision text was recorded; ask Firstmate in chat.")
-        if item["report"] is not None:
-            wrap("Document:\n%s" % document_target(item["report"], reader.home), "path")
-        confirm = ui["confirm"]
-        if confirm is not None and confirm["id"] == item["id"]:
-            ask = ("Drop %s? Firstmate will close it." % item["label"]) if confirm["verb"] == "drop" else \
-                ('Send "%s" as your answer to %s?' % (confirm["answer"], item["label"]))
-            wrap(ask + "  y yes · n no", "wait")
-        elif ui["busy"] == item["id"]:
-            wrap("Passing your answer on...", "wait")
-        elif item["task"] is not None:
-            wrap("y take the recommendation · a type an answer · d drop" + (" · o open the document" if item["report"] else ""), "keys")
+        if kind == "pr":
+            wrap(item["full_title"], "title")
+            if item["ready"]:
+                wrap("Ready - waiting for your word to merge.", "ready")
+            else:
+                wrap("Keeps it from merging: %s." % "; ".join(item["blockers"]), "wait")
+            if item["failed"]:
+                wrap("Failing: %s" % ", ".join(one["name"] + (" (required)" if one["required"] else "") for one in item["failed"]))
+                for one in item["failed"]:
+                    if one["url"] is not None:
+                        wrap("Log of %s:\n%s" % (one["name"], one["url"]), "path")
+            if item["running"]:
+                wrap("Running: %s" % ", ".join(item["running"]))
+            wrap(item["url"], "path")
+            keys = ["o open it in the browser"]
+            if any(one["url"] is not None for one in item["failed"]):
+                keys.append("g open the failing check's log")
+            keys.append("m merge" if item["ready"] else "f ask for a fix")
+            keys.append("c close")
         else:
-            wrap("Answer this one in chat with Firstmate." + (" o opens the document." if item["report"] else ""), "keys")
-    if not reader.decisions:
+            wrap(item["title"], "title")
+            wrap(item["detail"] or "No decision text was recorded; ask Firstmate in chat.")
+            if item["report"] is not None:
+                wrap("Document:\n%s" % document_target(item["report"], reader.home), "path")
+            if item["task"] is None:
+                wrap("Answer this one in chat with Firstmate." + (" o opens the document." if item["report"] else ""), "keys")
+                continue
+            keys = ["y take the recommendation", "a type an answer", "d drop"]
+            if item["report"]:
+                keys.append("o open the document")
+        if sending:
+            wrap("Passing on: %s." % staged_words(sending), "wait")
+            continue
+        if staged:
+            wrap("Staged: %s. u unstages; s submits everything staged." % staged_words(staged), "wait")
+        wrap(" · ".join(keys), "keys")
+    if not decisions:
         add("Decisions waiting for you (0)", "head")
         add("None.", prefix="  ")
+    body, lines = lines, []
     if ui["typing"] is not None:
-        add("Your answer (Enter to review, Esc to cancel): " + ui["typing"]["text"], "wait")
+        ask = "A note for the fix, optional" if ui["typing"]["verb"] == "fix" else "Your answer"
+        add("%s (Enter to stage, Esc to cancel): %s" % (ask, ui["typing"]["text"]), "wait")
+    if ui["confirm"] is not None:
+        count = len(ui["staged"])
+        wrap("Submit %d staged answer%s to Firstmate in one note?  y yes · n no" % (count, "" if count == 1 else "s"),
+             "wait", indent=2)
+    if ui["inflight"]:
+        wrap("Passing %d answer%s on..." % (len(ui["inflight"]), "" if len(ui["inflight"]) == 1 else "s"), "wait", indent=2)
     if ui["notice"] is not None:
         wrap(ui["notice"]["text"], "wait" if ui["notice"]["is_problem"] else "ready", indent=2)
     stamp = time.strftime("%H:%M", time.localtime(reader.at))
-    add("Updated %s, every minute and on r. Enter expands, q quits." % stamp)
+    submit = (" · s submits %d staged" % len(ui["staged"])) if ui["staged"] else ""
+    add("Updated %s, every minute and on r. Enter expands%s · q quits." % (stamp, submit))
     if reader.problem is not None:
         add(reader.problem, "wait")
-    return lines
+    return body, lines
 
 
 def new_ui():
-    return {"selected": 0, "open": [], "confirm": None, "busy": None, "typing": None, "notice": None}
+    return {"selected": 0, "key": None, "open": [], "confirm": None, "typing": None, "notice": None,
+            "staged": {}, "inflight": {}, "sent": {}, "quit_warned": False}
 
 
 # --- actions ---------------------------------------------------------------
@@ -578,25 +676,218 @@ def open_target(target):
         if shutil.which(opener) is None:
             continue
         try:
-            return subprocess.run([opener, target], capture_output=True, timeout=15, check=False).returncode == 0
+            return subprocess.run([opener, target], stdin=subprocess.DEVNULL, capture_output=True, timeout=15, check=False).returncode == 0
         except (OSError, subprocess.SubprocessError):
             return False
     return False
 
 
-def pass_on(reader, row, verb, answer):
-    """Run bin/fm-decision.sh for one confirmed choice; the outcome line it printed."""
-    argv = [DECISION_SCRIPT, verb, "--source", ANSWER_SOURCE, row["task"]]
-    if verb == "resolve":
-        argv.append("-")
+PAST = {"resolve": "resolved", "drop": "dropped", "merge": "merge", "fix": "fix", "close": "close"}
+
+
+def batch_line(entry):
+    """One line of bin/fm-decision.sh batch input for a staged entry."""
+    answer = CONTROLS.sub(" ", entry["answer"]).strip()
+    return " ".join(part for part in (entry["verb"], entry["target"], answer if entry["verb"] in ("resolve", "fix") else "") if part)
+
+
+def pass_on(reader, entries):
+    """Run bin/fm-decision.sh batch for the staged entries: (exit code, stdout, stderr)."""
+    text = "".join(batch_line(entry) + "\n" for entry in entries)
     try:
-        ran = subprocess.run(argv, input=answer if verb == "resolve" else None, env=dict(os.environ, FM_HOME=reader.home),
-                             capture_output=True, text=True, timeout=120, check=False)
+        ran = subprocess.run([DECISION_SCRIPT, "batch", "--source", ANSWER_SOURCE], input=text,
+                             env=dict(os.environ, FM_HOME=reader.home), capture_output=True, text=True, timeout=300, check=False)
     except (OSError, subprocess.SubprocessError) as error:
-        return {"text": "%s: the answer could not be passed on (%s)." % (row["label"], error), "is_problem": True}
-    said = (ran.stdout.strip() or ran.stderr.strip() or "no answer").splitlines()[-1]
-    said = re.sub(r"^fm-decision: ", "", said)
-    return {"text": "%s: %s" % (row["label"], said), "is_problem": ran.returncode != 0}
+        return 2, "", "the answers could not be passed on (%s)" % error
+    return ran.returncode, ran.stdout, ran.stderr
+
+
+class Controller:
+    """The view's keys and staged answers, apart from curses so `render --key` drives the same paths."""
+
+    def __init__(self, reader, on_refresh=lambda: None):
+        self.reader = reader
+        self.ui = new_ui()
+        self.on_refresh = on_refresh
+        self.worker = None
+        self.result = None
+
+    def items(self):
+        return items_of(self.reader, self.ui)
+
+    def selected(self):
+        items = self.items()
+        if not items or not 0 <= self.ui["selected"] < len(items):
+            return None, None
+        return items[self.ui["selected"]]
+
+    def select(self, index):
+        items = self.items()
+        self.ui["selected"] = min(max(index, 0), max(len(items) - 1, 0))
+        self.ui["key"] = key_of(*items[self.ui["selected"]]) if items else None
+
+    def sync(self):
+        """Keep the selection on the same item and drop stale staged answers after the list changed."""
+        ui = self.ui
+        listed = set(key_of(kind, item) for kind, item in items_of(self.reader))
+        ui["sent"] = {key: verb for key, verb in ui["sent"].items() if key in listed}
+        gone = [entry["label"] for key, entry in ui["staged"].items() if key not in listed]
+        if gone:
+            ui["staged"] = {key: entry for key, entry in ui["staged"].items() if key in listed}
+            ui["notice"] = {"text": "No longer listed, so its staged answer was let go: %s." % ", ".join(gone), "is_problem": True}
+        keys = [key_of(kind, item) for kind, item in self.items()]
+        self.select(keys.index(ui["key"]) if ui["key"] in keys else ui["selected"])
+
+    def stage(self, kind, row, verb, answer=""):
+        key = key_of(kind, row)
+        if key in self.ui["inflight"]:
+            self.ui["notice"] = {"text": "That one is being passed on now.", "is_problem": True}
+            return
+        label = row["label"] if kind == "decision" else "%s: %s" % (row["project"], row["title"])
+        self.ui["staged"][key] = {"verb": verb, "answer": answer, "label": label,
+                                  "target": row["task"] if kind == "decision" else row["url"]}
+        if key not in self.ui["open"]:
+            self.ui["open"].append(key)
+
+    def ask_submit(self):
+        ui = self.ui
+        if ui["inflight"]:
+            ui["notice"] = {"text": "Wait for the answers being passed on, then submit again.", "is_problem": True}
+            return
+        if not ui["staged"]:
+            ui["notice"] = {"text": "Nothing is staged; y, a, d, m, f, or c stage an answer first.", "is_problem": True}
+            return
+        rows = dict((key_of(kind, item), item) for kind, item in self.items())
+        unready = [entry["label"] for key, entry in ui["staged"].items()
+                   if entry["verb"] == "merge" and not rows.get(key, {}).get("ready")]
+        if unready:
+            ui["notice"] = {"text": "No longer ready to merge, so not submitted: %s. u unstages its merge." % ", ".join(unready),
+                            "is_problem": True}
+            return
+        ui["confirm"] = {"count": len(ui["staged"])}
+
+    def submit(self):
+        entries = list(self.ui["staged"].items())
+        self.ui["inflight"], self.ui["staged"] = dict(entries), {}
+
+        def run():
+            self.result = pass_on(self.reader, [entry for _key, entry in entries])
+
+        self.worker = threading.Thread(target=run, daemon=True)
+        self.worker.start()
+
+    def poll(self):
+        """Apply a finished submission; True when it changed what the view shows."""
+        if self.worker is None or self.worker.is_alive():
+            return False
+        code, out, err = self.result
+        self.worker = self.result = None
+        ui = self.ui
+        said = out.splitlines()
+        passed = 0
+        for key, entry in ui["inflight"].items():
+            if any(line.startswith("%s: %s (" % (PAST[entry["verb"]], entry["target"])) for line in said):
+                ui["sent"][key] = entry["verb"]
+                passed += 1
+                if key in ui["open"]:
+                    ui["open"].remove(key)
+            elif key not in ui["staged"]:
+                ui["staged"][key] = entry
+        ui["inflight"] = {}
+        problems = [re.sub(r"^fm-decision: ", "", line) for line in err.splitlines() if line.strip()]
+        if code == 0:
+            text = "Passed %d answer%s on in one note; Firstmate is told." % (passed, "" if passed == 1 else "s")
+        elif passed:
+            text = "Passed %d on, but: %s" % (passed, "\n".join(problems) or "no answer")
+        else:
+            text = "Nothing was passed on; the answers stay staged.\n%s" % ("\n".join(problems) or "no answer")
+        ui["notice"] = {"text": text, "is_problem": code != 0}
+        self.sync()
+        self.on_refresh()
+        return True
+
+    def act(self, key):
+        """Handle one key: a printable character or a name such as enter, esc, up, down. False quits."""
+        ui = self.ui
+        ui["notice"] = None
+        if ui["typing"] is not None:
+            typing = ui["typing"]
+            if key == "enter":
+                ui["typing"] = None
+                row = next((item for kind, item in self.items() if key_of(kind, item) == typing["id"]), None)
+                text = typing["text"].strip()
+                if row is not None and (text or typing["verb"] == "fix"):
+                    self.stage(typing["kind"], row, typing["verb"], text)
+            elif key == "esc":
+                ui["typing"] = None
+            elif key == "backspace":
+                typing["text"] = typing["text"][:-1]
+            elif len(key) == 1 and key.isprintable():
+                typing["text"] = (typing["text"] + key)[:500]
+            return True
+        if ui["confirm"] is not None:
+            ui["confirm"] = None
+            if key in ("y", "Y"):
+                self.submit()
+            return True
+        if key in ("q", "Q"):
+            if (ui["staged"] or ui["inflight"]) and not ui["quit_warned"]:
+                ui["quit_warned"] = True
+                ui["notice"] = {"text": "Quitting lets go of %d staged answer%s, which Firstmate never sees. "
+                                        "q again quits; s submits them." % (len(ui["staged"]), "" if len(ui["staged"]) == 1 else "s"),
+                                "is_problem": True}
+                return True
+            return False
+        ui["quit_warned"] = False
+        kind, row = self.selected()
+        if key in ("down", "j"):
+            self.select(ui["selected"] + 1)
+        elif key in ("up", "k"):
+            self.select(ui["selected"] - 1)
+        elif key in ("r", "R"):
+            self.on_refresh()
+        elif key == "s":
+            self.ask_submit()
+        elif row is None:
+            pass
+        elif key in ("enter", " ", "right", "left", "l", "h"):
+            item = key_of(kind, row)
+            is_open = item in ui["open"]
+            if key in ("right", "l") or (not is_open and key not in ("left", "h")):
+                if not is_open:
+                    ui["open"].append(item)
+            elif is_open:
+                ui["open"].remove(item)
+        elif key == "o":
+            target = row.get("url") if kind == "pr" else (document_target(row["report"], self.reader.home) if row.get("report") else None)
+            if target is not None and not open_target(target):
+                ui["notice"] = {"text": "That would not open here; its path or link is shown above to copy.", "is_problem": True}
+        elif key == "u":
+            if ui["staged"].pop(key_of(kind, row), None) is not None:
+                ui["notice"] = {"text": "Unstaged.", "is_problem": False}
+        elif kind == "pr" and key == "g":
+            log = next((one["url"] for one in row["failed"] if one["url"] is not None), None)
+            if log is None:
+                ui["notice"] = {"text": "No failing check with a log on this pull request.", "is_problem": True}
+            elif not open_target(log):
+                ui["notice"] = {"text": "That would not open here; the log's link is shown above to copy.", "is_problem": True}
+        elif kind == "pr" and key == "m":
+            if row["ready"]:
+                self.stage(kind, row, "merge")
+            else:
+                ui["notice"] = {"text": "Merge is offered only once nothing keeps it from merging.", "is_problem": True}
+        elif kind == "pr" and key == "f":
+            ui["typing"] = {"id": row["url"], "kind": kind, "verb": "fix", "text": ""}
+        elif kind == "pr" and key == "c":
+            self.stage(kind, row, "close")
+        elif kind == "decision" and row["task"] is not None:
+            if key == "y":
+                self.stage(kind, row, "resolve", RECOMMENDED)
+            elif key == "d":
+                self.stage(kind, row, "drop", "Drop this.")
+            elif key == "a":
+                ui["typing"] = {"id": row["id"], "kind": kind, "verb": "resolve", "text": ""}
+        return True
 
 
 # --- the live view ---------------------------------------------------------
@@ -604,8 +895,9 @@ def pass_on(reader, row, verb, answer):
 def run_view(reader):
     import curses
 
-    ui = new_ui()
     wake = threading.Event()
+    control = Controller(reader, on_refresh=wake.set)
+    ui = control.ui
 
     def reading():
         while True:
@@ -614,81 +906,27 @@ def run_view(reader):
             wake.clear()
 
     threading.Thread(target=reading, daemon=True).start()
-
-    def selected_row():
-        items = items_of(reader)
-        if not items or ui["selected"] >= len(items):
-            return None, None
-        return items[ui["selected"]]
-
-    def act(screen, key):
-        kind, row = selected_row()
-        if ui["typing"] is not None:
-            if key in ("\n", "\r", curses.KEY_ENTER):
-                text = ui["typing"]["text"].strip()
-                target = ui["typing"]["id"]
-                ui["typing"] = None
-                if text:
-                    ui["confirm"] = {"id": target, "verb": "resolve", "answer": text}
-            elif key == "\x1b":
-                ui["typing"] = None
-            elif key in (curses.KEY_BACKSPACE, "\x7f", "\b"):
-                ui["typing"]["text"] = ui["typing"]["text"][:-1]
-            elif isinstance(key, str) and key.isprintable():
-                ui["typing"]["text"] = (ui["typing"]["text"] + key)[:500]
-            return True
-        if ui["confirm"] is not None:
-            confirm, ui["confirm"] = ui["confirm"], None
-            if key in ("y", "Y"):
-                target = next((one for one in reader.decisions if one["id"] == confirm["id"]), None)
-                if target is not None and target["task"] is not None:
-                    ui["busy"] = target["id"]
-                    draw(screen)
-                    ui["notice"] = pass_on(reader, target, confirm["verb"], confirm["answer"])
-                    ui["busy"] = None
-                    wake.set()
-            return True
-        if key in ("q", "Q"):
-            return False
-        count = len(items_of(reader))
-        if key in (curses.KEY_DOWN, "j"):
-            ui["selected"] = min(max(count - 1, 0), ui["selected"] + 1)
-        elif key in (curses.KEY_UP, "k"):
-            ui["selected"] = max(0, ui["selected"] - 1)
-        elif key in ("r", "R"):
-            wake.set()
-        elif kind == "decision" and key in ("\n", "\r", " ", curses.KEY_ENTER, curses.KEY_RIGHT, curses.KEY_LEFT, "l", "h"):
-            is_open = row["id"] in ui["open"]
-            if key in (curses.KEY_RIGHT, "l") or (not is_open and key not in (curses.KEY_LEFT, "h")):
-                if not is_open:
-                    ui["open"].append(row["id"])
-            elif is_open:
-                ui["open"].remove(row["id"])
-        elif key == "o" and row is not None:
-            target = row.get("url") if kind == "pr" else (document_target(row["report"], reader.home) if row.get("report") else None)
-            if target is not None and not open_target(target):
-                ui["notice"] = {"text": "That would not open here; its path or link is shown above to copy.", "is_problem": True}
-        elif kind == "decision" and row["task"] is not None and row["id"] in ui["open"]:
-            if key == "y":
-                ui["confirm"] = {"id": row["id"], "verb": "resolve", "answer": RECOMMENDED}
-            elif key == "d":
-                ui["confirm"] = {"id": row["id"], "verb": "drop", "answer": "Drop this."}
-            elif key == "a":
-                ui["typing"] = {"id": row["id"], "text": ""}
-        return True
+    names = {curses.KEY_DOWN: "down", curses.KEY_UP: "up", curses.KEY_RIGHT: "right", curses.KEY_LEFT: "left",
+             curses.KEY_ENTER: "enter", curses.KEY_BACKSPACE: "backspace", "\n": "enter", "\r": "enter",
+             "\x1b": "esc", "\x7f": "backspace", "\b": "backspace"}
 
     def draw(screen):
         height, width = screen.getmaxyx()
         with reader.lock:
-            lines = frame(reader, ui, width - 1)
+            body, foot = frame_parts(reader, ui, width - 1)
+        foot = foot[-max(height - 1, 0):]
+        room = max(height - len(foot), 1)
         styles = {
             "head": curses.A_BOLD, "ready": curses.color_pair(1), "wait": curses.color_pair(2),
             "decision": curses.color_pair(3), "path": curses.color_pair(3), "keys": curses.A_DIM,
         }
-        chosen = next((i for i, line in enumerate(lines) if line[2] == ui["selected"]), 0)
-        top = 0 if chosen < height - 1 else chosen - height + 2
+        chosen = next((i for i, line in enumerate(body) if line[2] == ui["selected"]), 0)
+        top = 0 if chosen < room - 1 else chosen - room + 2
         screen.erase()
-        for y, (text, style, index) in enumerate(lines[top: top + height]):
+        shown = body[top: top + room]
+        # The footer sits under a short list and stays pinned to the bottom under a long one.
+        gap = room - len(shown) if len(body) > room else 0
+        for y, (text, style, index) in enumerate(shown + [("", "text", None)] * gap + foot):
             attr = styles.get(style, curses.A_NORMAL)
             if index is not None and index == ui["selected"]:
                 attr |= curses.A_REVERSE
@@ -706,9 +944,11 @@ def run_view(reader):
         screen.timeout(500)
         seen = -1
         while True:
+            control.poll()
             if reader.version != seen:
                 seen = reader.version
-                ui["selected"] = min(ui["selected"], max(len(items_of(reader)) - 1, 0))
+                with reader.lock:
+                    control.sync()
             draw(screen)
             try:
                 key = screen.get_wch()
@@ -716,7 +956,8 @@ def run_view(reader):
                 continue
             if key == curses.KEY_RESIZE:
                 continue
-            if not act(screen, key):
+            key = names.get(key, key)
+            if isinstance(key, str) and not control.act(key):
                 return
 
     os.environ.setdefault("ESCDELAY", "25")
@@ -779,7 +1020,8 @@ def main(argv):
     if command in ("-h", "--help"):
         print(__doc__.strip())
         return 0
-    known = {"view": set(), "open": {"--session", "--pane"}, "render": {"--snapshot", "--width", "--expand", "--select"}}
+    known = {"view": set(), "open": {"--session", "--pane"},
+             "render": {"--snapshot", "--width", "--expand", "--select", "--key", "--type"}}
     if command not in known or any(arg.startswith("--") and arg not in known[command] for arg in args):
         print(__doc__.strip(), file=sys.stderr)
         return 2
@@ -799,14 +1041,25 @@ def main(argv):
     reader = Reader(home, option(args, "--snapshot"))
     if command == "render":
         reader.refresh()
-        ui = new_ui()
+        control = Controller(reader)
+        ui = control.ui
         items = items_of(reader)
+        control.select(int(option(args, "--select", "1")) - 1)
         for i, arg in enumerate(args[:-1]):
+            value = args[i + 1]
             if arg == "--expand":
-                position = int(args[i + 1]) - 1
-                if 0 <= position < len(items) and items[position][0] == "decision":
-                    ui["open"].append(items[position][1]["id"])
-        ui["selected"] = int(option(args, "--select", "0")) - 1
+                position = int(value) - 1
+                if 0 <= position < len(items):
+                    ui["open"].append(key_of(*items[position]))
+            elif arg in ("--key", "--type"):
+                for key in ([value] if arg == "--key" else list(value)):
+                    if not control.act(" " if key == "space" else key):
+                        ui["notice"] = {"text": "(the view quit here)", "is_problem": False}
+                    if control.worker is not None:
+                        control.worker.join()
+                        control.poll()
+        if "--select" not in args and not any(arg in ("--key", "--type") for arg in args):
+            ui["selected"] = -1
         for text, _style, _index in frame(reader, ui, int(option(args, "--width", "80"))):
             print(text)
         return 0
