@@ -111,8 +111,19 @@ run_with_perl_timeout() {  # <seconds> <signal> <kill-after-seconds> <command...
   ' "$@"
 }
 
+gnu_kill_after_timeout() {  # prints the first GNU coreutils timeout on PATH
+  local tool
+  for tool in timeout gtimeout gnutimeout; do
+    command -v "$tool" >/dev/null 2>&1 || continue
+    "$tool" --version 2>/dev/null | grep -q 'GNU coreutils' || continue
+    printf '%s\n' "$tool"
+    return 0
+  done
+  return 1
+}
+
 run_bounded() {  # <seconds> <signal> <kill-after-seconds> <command...>
-  local seconds=$1 signal=$2 kill_after=$3 cleanup_lock_bound
+  local seconds=$1 signal=$2 kill_after=$3 cleanup_lock_bound tool
   shift 3
   if [ "$kill_after" -gt 0 ]; then
     cleanup_lock_bound=${FM_WATCHER_CLEANUP_LOCK_BOUND:-2}
@@ -123,19 +134,18 @@ run_bounded() {  # <seconds> <signal> <kill-after-seconds> <command...>
     [ "$cleanup_lock_bound" -gt 0 ] || cleanup_lock_bound=2
     [ "$cleanup_lock_bound" -gt "$kill_after" ] || cleanup_lock_bound=$kill_after
     kill_after=$cleanup_lock_bound
-  fi
-  if command -v timeout >/dev/null 2>&1; then
-    if [ "$kill_after" -gt 0 ]; then
-      timeout --signal="$signal" --kill-after="${kill_after}s" "$seconds" "$@"
+    # uutils timeout (Ubuntu 26.04's default) ignores --kill-after under
+    # --signal=INT and kills at the bound with 137, before the watcher's EXIT
+    # cleanup runs, so a cleanup bound needs GNU timeout or the Perl fallback.
+    if tool=$(gnu_kill_after_timeout); then
+      "$tool" --signal="$signal" --kill-after="${kill_after}s" "$seconds" "$@"
     else
-      timeout --signal="$signal" "$seconds" "$@"
+      run_with_perl_timeout "$seconds" "$signal" "$kill_after" "$@"
     fi
+  elif command -v timeout >/dev/null 2>&1; then
+    timeout --signal="$signal" "$seconds" "$@"
   elif command -v gtimeout >/dev/null 2>&1; then
-    if [ "$kill_after" -gt 0 ]; then
-      gtimeout --signal="$signal" --kill-after="${kill_after}s" "$seconds" "$@"
-    else
-      gtimeout --signal="$signal" "$seconds" "$@"
-    fi
+    gtimeout --signal="$signal" "$seconds" "$@"
   else
     run_with_perl_timeout "$seconds" "$signal" "$kill_after" "$@"
   fi

@@ -133,24 +133,24 @@ describe('the pane', () => {
       const pane = await $.ui.mount({ ...PANE, surface })
       expect((await pane.find({ type: 'Text', text: /Open pull requests \(2\)/ })) !== undefined).toBe(true)
       expect((await pane.find({ type: 'Text', text: /axi: Package axi for brew/ })) !== undefined).toBe(true)
-      expect((await pane.find({ type: 'Text', text: new RegExp(AXI) })) !== undefined).toBe(true)
-      expect((await pane.find({ type: 'Text', text: /checks passing - ready - waiting for your word to merge/ })) !== undefined).toBe(true)
-      expect((await pane.find({ type: 'Text', text: /checks 1 failing - a failing check; needs an approving review/ })) !== undefined).toBe(true)
+      expect((await pane.find({ type: 'Link', props: { href: AXI } })) !== undefined).toBe(true)
+      expect((await pane.find({ type: 'Text', text: /passing · ready - waiting for your word to merge/ })) !== undefined).toBe(true)
+      expect((await pane.find({ type: 'Text', text: /1 failing · a failing check; needs an approving review/ })) !== undefined).toBe(true)
       expect((await pane.find({ type: 'Text', text: /Decisions waiting for you \(2\)/ })) !== undefined).toBe(true)
-      expect((await pane.find({ type: 'Text', text: /booking-explore · s6-cli-q: Should the CLI build alone/ })) !== undefined).toBe(true)
-      expect((await pane.find({ type: 'Text', text: /report data\/s6-codex-cp1\/report\.md/ })) !== undefined).toBe(true)
+      expect((await pane.find({ type: 'Text', text: /booking-explore · s6-cli-q: s6 cli q/ })) !== undefined).toBe(true)
+      expect((await pane.find({ type: 'Link', props: { href: 'file:///fm/data/s6-codex-cp1/report.md' } })) !== undefined).toBe(true)
       expect((await pane.find({ type: 'Text', text: /inspector-lavish-ship: Ship the Lavish review page\?/ })) !== undefined).toBe(true)
       await pane.unmount()
     }
   })
 
-  test('reads the snapshot for this home with nothing written, and asks GitHub once for every pull request', async ($, on) => {
+  test('reads the snapshot for this home with nothing written, and asks GitHub in two batches for state and open PR checks', async ($, on) => {
     const w = world(on)
     await start($, w)
     expect(w.runs[0]?.argv).toEqual([`${HOME}/bin/fm-fleet-snapshot.sh`, '--json'])
     expect(w.runs[0]?.env).toEqual({ FM_HOME: HOME, FM_CREW_STATE_NO_FORGE: '1', FM_SNAPSHOT_CACHE_DIR: '/dev/null/fleet-pane' })
     expect(w.runs[1]?.argv.slice(0, 3)).toEqual(['gh', 'api', 'graphql'])
-    expect(ghRuns(w)).toBe(1)
+    expect(ghRuns(w)).toBe(2)
     expect(w.writes).toEqual([])
   })
 
@@ -161,11 +161,11 @@ describe('the pane', () => {
     await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
     await w.clock.advance(10)
     expect(w.runs.filter(run => run.argv[0] !== 'gh')).toHaveLength(2)
-    expect(ghRuns(w)).toBe(1)
+    expect(ghRuns(w)).toBe(2)
 
     w.github = { data: { ...GITHUB.data, p1: pr('Cut the frame cost', 'MERGED', 'SUCCESS', null) } }
     await w.clock.advance(60_000)
-    expect(ghRuns(w)).toBe(2)
+    expect(ghRuns(w)).toBe(4)
     const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
     expect((await pane.find({ type: 'Text', text: /Open pull requests \(1\)/ })) !== undefined).toBe(true)
     expect(await pane.find({ type: 'Text', text: /Cut the frame cost/ })).toBeUndefined()
@@ -237,7 +237,7 @@ describe('the pane under any theme', () => {
     const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
     expect(await pane.drawn()).toMatchObject({ type: 'Box', props: { backgroundColor: 'composerSidebarBackground' } })
     const texts = await pane.findAll({ type: 'Text' })
-    expect(texts.length).toBeGreaterThan(10)
+    expect(texts.length).toBeGreaterThan(5)
     for (const text of texts) {
       expect({ text: text.text, color: THEME.has(String(text.props.color)) }).toEqual({ text: text.text, color: true })
       expect({ text: text.text, dimColor: text.props.dimColor }).toEqual({ text: text.text, dimColor: undefined })
@@ -246,21 +246,18 @@ describe('the pane under any theme', () => {
 })
 
 describe('the pane at a narrow width', () => {
-  test('wraps every line within the pane, keeping each URL and blocker whole, and rewraps when resized', async ($, on) => {
+  test('keeps one line per item after resizing, with whole link targets', async ($, on) => {
     const w = world(on)
     await start($, w)
     const pane = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns: 70 } })
     for (const columns of [70, 34]) {
       await pane.redraw({ ...PANE.props, bodyColumns: columns })
       const lines = (await pane.findAll({ type: 'Text' })).filter(text => text.props.wrap === 'truncate-end').map(text => text.text)
-      expect(lines.length).toBeGreaterThan(10)
-      for (const line of lines) expect({ line, isWithin: line.length <= columns }).toEqual({ line, isWithin: true })
-      const all = lines.map(line => line.trim()).join(' ')
-      const joined = lines.map(line => line.trim()).join('')
-      expect(joined.includes(AXI) && joined.includes(KSM)).toBe(true)
-      expect(all).toContain('checks 1 failing - a failing check; needs an approving review')
-      expect(all).toContain('inspector-lavish-ship: Ship the Lavish review page?')
-      expect(all).toContain('report data/s6-codex-cp1/report.md')
+      expect(lines).toHaveLength(7)
+      for (const line of lines) expect({ line, isWithin: line.length <= columns, single: !line.includes('\n') }).toEqual({ line, isWithin: true, single: true })
+      const links = await pane.findAll({ type: 'Link' })
+      expect(links.map(link => link.props.href)).toEqual([AXI, KSM, 'file:///fm/data/s6-codex-cp1/report.md'])
+      expect(lines.some(line => line.endsWith('…'))).toBe(true)
     }
     await pane.unmount()
   })
