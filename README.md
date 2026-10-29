@@ -216,6 +216,7 @@ Firstmate's skills live in two separate places with different audiences:
 - [docs/remote-secondmates.md](docs/remote-secondmates.md) - current setup, routing, transfer, recovery, and safety behavior for whole-home remote secondmates.
 - [docs/remote-workers.md](docs/remote-workers.md) - placing one ship or scout worker on another machine while this home supervises it.
 - [docs/calm.md](docs/calm.md) - current `/calm` behavior on Pi and Claude Code and its supported presentation limits.
+- [docs/fleet-pane.md](docs/fleet-pane.md) - the fleet pane beside the firstmate session: open pull requests and decisions waiting for you, with expand, resolve, and drop.
 - [docs/fleet-ledger.md](docs/fleet-ledger.md) - the opt-in activity ledger outside tools can read to follow a home's tasks, and its record contract.
 - [docs/wedge-alarm.md](docs/wedge-alarm.md) - configure the active alert for an away-mode escalation delivery that gets stuck.
 - [docs/usage-warner.md](docs/usage-warner.md) - configure the opt-in local threshold warner for Claude usage windows.

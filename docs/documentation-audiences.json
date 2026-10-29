@@ -302,6 +302,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/fleet-pane.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/herdr-backend.md",
       "audience": "operator-current"
     },
@@ -390,7 +394,7 @@
       "audience": "maintainer-verification"
     },
     {
-      "path": "docs/verification/fleet-pane-mod.md",
+      "path": "docs/verification/fleet-pane.md",
       "audience": "maintainer-verification"
     },
     {
@@ -431,10 +435,6 @@
     },
     {
       "path": "docs/wedge-alarm.md",
-      "audience": "operator-current"
-    },
-    {
-      "path": "mods/fleet-pane/README.md",
       "audience": "operator-current"
     },
     {
