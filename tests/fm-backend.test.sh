@@ -541,40 +541,49 @@ test_backend_source_shell_portable() {
   pass "bash: fm_backend_source recognizes known backends and rejects unknown ones"
 }
 
-test_backend_source_requires_adapter_file() {
+# One adapter-precheck condition. Each case is its own TAP test so the
+# stock-bash completeness check counts both without a hard-coded 2 in CI.
+_backend_source_adapter_condition() {  # missing|unreadable
   local dir adapter exit_status continuation out rc condition test_bash
+  condition=$1
   dir="$TMP_ROOT/adapter-precheck"
   adapter="$dir/backends/tmux.sh"
   test_bash=${FM_TEST_BASH:-${BASH:-bash}}
   mkdir -p "$dir/backends"
 
-  for condition in missing unreadable; do
-    if [ "$condition" = unreadable ]; then
-      printf ':\n' > "$adapter"
-      chmod 000 "$adapter"
-      if [ -r "$adapter" ]; then
-        pass "fm_backend_source: unreadable adapter case skipped (this user can read mode-000 files)"
-        continue
-      fi
+  if [ "$condition" = unreadable ]; then
+    printf ':\n' > "$adapter"
+    chmod 000 "$adapter"
+    if [ -r "$adapter" ]; then
+      pass "fm_backend_source: unreadable adapter case skipped (this user can read mode-000 files)"
+      return 0
     fi
-    exit_status="$dir/$condition.exit"
-    continuation="$dir/$condition.continued"
-    # shellcheck disable=SC2016 # The child Bash expands $1..$4 and $? at runtime.
-    out=$("$test_bash" -c '
-      . "$1"
-      FM_BACKEND_LIB_DIR=$2
-      trap '\''printf "%s\n" "$?" > "$3"'\'' EXIT
-      set -e
-      fm_backend_source tmux
-      : > "$4"
-    ' _ "$ROOT/bin/fm-backend.sh" "$dir" "$exit_status" "$continuation" 2>&1)
-    rc=$?
-    [ "$rc" -ne 0 ] || fail "fm_backend_source returned success for a $condition adapter: $out"
-    [ -f "$exit_status" ] || fail "fm_backend_source did not record the $condition adapter exit status"
-    [ "$(cat "$exit_status")" -ne 0 ] || fail "fm_backend_source lost the $condition adapter failure at EXIT"
-    [ ! -e "$continuation" ] || fail "fm_backend_source continued the lifecycle after a $condition adapter"
-    pass "fm_backend_source: $condition adapter fails before lifecycle continuation"
-  done
+  fi
+  exit_status="$dir/$condition.exit"
+  continuation="$dir/$condition.continued"
+  # shellcheck disable=SC2016 # The child Bash expands $1..$4 and $? at runtime.
+  out=$("$test_bash" -c '
+    . "$1"
+    FM_BACKEND_LIB_DIR=$2
+    trap '\''printf "%s\n" "$?" > "$3"'\'' EXIT
+    set -e
+    fm_backend_source tmux
+    : > "$4"
+  ' _ "$ROOT/bin/fm-backend.sh" "$dir" "$exit_status" "$continuation" 2>&1)
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "fm_backend_source returned success for a $condition adapter: $out"
+  [ -f "$exit_status" ] || fail "fm_backend_source did not record the $condition adapter exit status"
+  [ "$(cat "$exit_status")" -ne 0 ] || fail "fm_backend_source lost the $condition adapter failure at EXIT"
+  [ ! -e "$continuation" ] || fail "fm_backend_source continued the lifecycle after a $condition adapter"
+  pass "fm_backend_source: $condition adapter fails before lifecycle continuation"
+}
+
+test_backend_source_requires_missing_adapter_file() {
+  _backend_source_adapter_condition missing
+}
+
+test_backend_source_requires_unreadable_adapter_file() {
+  _backend_source_adapter_condition unreadable
 }
 
 test_backend_validate_spawn_accepts_orca() {
@@ -727,7 +736,7 @@ case "${1:-}" in
       printf '╭────╮\n│    │\n╰────╯\n'
     fi
     exit 0 ;;
-  list-windows) exit 0 ;;
+  list-windows) printf 'win\n'; exit 0 ;;
 esac
 exit 0
 SH
@@ -746,7 +755,7 @@ run_send_case() {  # <bin-root> <fakebin> <log> <home> -- <send args...>
 
 strip_send_preflight() {  # <log>
   local preflight
-  preflight=$'tmux\x1fdisplay-message\x1f-p\x1f-t\x1fsess:win\x1f#{pane_id}'
+  preflight=$'tmux\x1flist-windows\x1f-t\x1f=sess\x1f-F\x1f#{window_name}'
   awk -v preflight="$preflight" '$0 != preflight { print }' "$1"
 }
 
@@ -767,7 +776,7 @@ test_send_tmux_contract() {
   run_send_case "$ROOT" "$fb" "$log" "$home" -- "sess:win" --key Escape
   rc=$?
   expect_code 0 "$rc" "fm-send --key should succeed against a live fake pane"
-  assert_contains "$(cat "$log")" $'\x1f''display-message'$'\x1f''-p'$'\x1f''-t'$'\x1f''sess:win'$'\x1f''#{pane_id}' \
+  assert_contains "$(cat "$log")" $'\x1f''list-windows'$'\x1f''-t'$'\x1f''=sess'$'\x1f''-F'$'\x1f''#{window_name}' \
     "fm-send --key did not verify the explicit tmux target before sending"
   assert_contains "$(cat "$log")" $'\x1f''Escape' "fm-send --key did not send the named key"
   assert_not_contains "$(cat "$log")" $'\x1f''-l'$'\x1f' "fm-send --key must not type literal text"
@@ -848,7 +857,7 @@ test_peek_conformance_old_vs_new() {
 # --- old vs new: fm-spawn.sh --------------------------------------------------
 
 make_spawn_fakebin() {  # <dir> <fake-worktree-path> -> echoes fakebin dir
-  local dir=$1 wt=$2 fb="$1/fakebin"
+  local dir=$1 wt=$2 fb="$1/fakebin" window_file="$1/window-name"
   mkdir -p "$fb"
   cat > "$fb/tmux" <<SH
 #!/usr/bin/env bash
@@ -858,7 +867,23 @@ case "\${1:-}" in
   display-message)
     for a in "\$@"; do case "\$a" in *pane_current_path*) printf '%s\\n' "$wt"; exit 0 ;; esac; done
     printf 'firstmate\\n'; exit 0 ;;
-  list-windows) exit 0 ;;
+  new-window)
+    _name=
+    _previous=
+    for _arg in "\$@"; do
+      [ "\$_previous" = -n ] && _name=\$_arg
+      _previous=\$_arg
+    done
+    printf '%s\\n' "\$_name" > "$window_file"
+    printf '@1\\n'
+    exit 0 ;;
+  list-windows)
+    [ -s "$window_file" ] || exit 0
+    case "\$*" in
+      *'#{window_id}'*) printf '@1\\n' ;;
+      *) cat "$window_file" ;;
+    esac
+    exit 0 ;;
 esac
 exit 0
 SH
@@ -910,8 +935,8 @@ run_spawn_case() {  # <bin-root> <fakebin> <log> <state> <data> <config> <proj> 
 # first pane_current_path poll, then the real worktree path from the second poll
 # onward, so this test fails loudly if the PROJ_ABS/PROJ_ABS_REAL
 # canonicalization in bin/fm-spawn.sh ever regresses.
-make_spawn_symlink_fakebin() {  # <dir> <initial-project-path> <worktree-path> -> echoes fakebin dir
-  local dir=$1 initial_path=$2 wt=$3 fb="$1/fakebin" counter="$1/poll-count"
+make_spawn_symlink_fakebin() {  # <dir> <initial-project-path> <worktree-path> <window-name> -> echoes fakebin dir
+  local dir=$1 initial_path=$2 wt=$3 window_name=$4 fb="$1/fakebin" counter="$1/poll-count"
   mkdir -p "$fb"
   : > "$counter"
   cat > "$fb/tmux" <<SH
@@ -930,7 +955,17 @@ case "\${1:-}" in
       exit 0
     ;; esac; done
     printf 'firstmate\\n'; exit 0 ;;
-  list-windows) exit 0 ;;
+  new-window)
+    : > "$counter.window-created"
+    printf '@1\\n'
+    exit 0 ;;
+  list-windows)
+    [ -e "$counter.window-created" ] || exit 0
+    case "\$*" in
+      *'#{window_id}'*) printf '@1\\n' ;;
+      *) printf '%s\\n' "$window_name" ;;
+    esac
+    exit 0 ;;
 esac
 exit 0
 SH
@@ -959,7 +994,7 @@ run_spawn_symlink_case() {  # <label> <physical|logical>
     logical) initial_path=$proj ;;
     *) fail "unknown symlink first-reply mode: $first_reply" ;;
   esac
-  fb=$(make_spawn_symlink_fakebin "$TMP_ROOT/symlink-fake-$label" "$initial_path" "$wt")
+  fb=$(make_spawn_symlink_fakebin "$TMP_ROOT/symlink-fake-$label" "$initial_path" "$wt" "fm-$id")
   data="$TMP_ROOT/symlink-data-$label"
   mkdir -p "$data/$id"
   write_spawn_brief "$data/$id/brief.md" "$id"
@@ -1204,6 +1239,15 @@ test_spawn_autodetect_nesting_resolves_tmux_silently() {
   pass "fm-spawn.sh: auto-detect resolves nested tmux-in-herdr to tmux and stays silent end to end"
 }
 
+# CI's stock macOS Bash lane sets FM_TEST_STOCK_BASH=1 to run just the adapter
+# precheck pair. Adding another stock-bash case means adding it to this list,
+# not to ci.yml.
+if [ -n "${FM_TEST_STOCK_BASH:-}" ]; then
+  fm_test_run \
+    test_backend_source_requires_missing_adapter_file \
+    test_backend_source_requires_unreadable_adapter_file
+  exit 0
+fi
 if [ -n "${FM_TEST_ONLY:-}" ]; then
   "$FM_TEST_ONLY"
   exit 0
@@ -1224,7 +1268,8 @@ test_backend_name_autodetect_notice
 test_backend_name_explicit_beats_detection
 test_backend_validate_refuses_unknown
 test_backend_source_shell_portable
-test_backend_source_requires_adapter_file
+test_backend_source_requires_missing_adapter_file
+test_backend_source_requires_unreadable_adapter_file
 test_backend_validate_spawn_accepts_orca
 test_meta_get_and_backend_of_meta
 test_resolve_selector_three_forms

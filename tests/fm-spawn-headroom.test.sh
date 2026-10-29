@@ -122,10 +122,24 @@ make_case() {  # <name> [task-id...]
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FM_FAKE_CALL_LOG"
+window_file="$(dirname "$0")/.spawn-window"
 case "$*" in
   *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
 esac
-case "${1:-}" in display-message) printf 'firstmate\n' ;; esac
+case "${1:-}" in
+  display-message) printf 'firstmate\n' ;;
+  # The backend confirms a window exists before sending it a key, so report
+  # the window this stub created.
+  list-windows) [ ! -s "$window_file" ] || cat "$window_file" ;;
+  new-window)
+    previous=
+    for arg in "$@"; do
+      [ "$previous" != -n ] || printf '%s\n' "$arg" > "$window_file"
+      previous=$arg
+    done
+    ;;
+  kill-window) : > "$window_file" ;;
+esac
 exit 0
 SH
   cat > "$fakebin/treehouse" <<'SH'

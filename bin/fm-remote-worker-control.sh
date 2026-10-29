@@ -18,6 +18,7 @@
 #   fm-remote-worker-control.sh capture <id> [lines]
 #   fm-remote-worker-control.sh observe <id>
 #   fm-remote-worker-control.sh send <id> <message> [fire-and-forget]
+#   fm-remote-worker-control.sh send-stdin <id> [fire-and-forget]  # message on stdin
 #   fm-remote-worker-control.sh key <id> <key>
 #   fm-remote-worker-control.sh control <id> interrupt|exit
 #   fm-remote-worker-control.sh control <id> relaunch <harness> <model> <effort>   (stdin: progress note)
@@ -595,6 +596,16 @@ cmd_send() {
   esac
 }
 
+# The message travels on stdin, as a remote secondmate steer's does
+# (bin/fm-remote-secondmate-control.sh cmd_send_stdin), so its size is not
+# bounded by the SSH exec argument limit.
+cmd_send_stdin() {
+  local id=$1 delivery_mode=${2:-} message
+  IFS= read -r -d '' message < /dev/stdin || :
+  [ -n "${message//[[:space:]]/}" ] || die "worker steer message must be nonempty"
+  cmd_send "$id" "$message" "$delivery_mode"
+}
+
 cmd_key() {
   local id=$1 key=$2
   validate_id "$id"
@@ -667,6 +678,7 @@ case "${1:-}" in
   capture) shift; [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage; cmd_capture "$@" ;;
   observe) shift; [ "$#" -eq 1 ] || usage; cmd_observe "$@" ;;
   send) shift; [ "$#" -ge 2 ] && [ "$#" -le 3 ] || usage; cmd_send "$@" ;;
+  send-stdin) shift; [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage; cmd_send_stdin "$@" ;;
   key) shift; [ "$#" -eq 2 ] || usage; cmd_key "$@" ;;
   control) shift; [ "$#" -eq 2 ] || [ "$#" -eq 5 ] || usage; cmd_control "$@" ;;
   retire) shift; [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage; cmd_retire "$@" ;;

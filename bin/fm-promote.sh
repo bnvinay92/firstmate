@@ -32,12 +32,18 @@
 # A scout spawned on a named base records base_branch= in its meta; promotion
 # keeps that base as the ship's starting point and pull-request target, and
 # refuses a mode that cannot carry one (bin/fm-dod-lib.sh fm_base_branch_valid).
+# In a home with config/spawn-base-primary-checkout, which can start a scout from
+# the primary checkout's default branch, a publishing mode without a named base
+# on a project with an origin remote is told to return to origin's default
+# branch instead, so commits origin has never received cannot ride along in
+# what it publishes.
 # There is no --forge flag here: the binding comes from the registry, and for a
 # task record naming no project it is none. bin/fm-brief.sh takes --forge instead
 # because that script has no registry access at all, and bin/fm-spawn.sh checks
 # its value against the registry; bin/fm-project-mode.sh's header owns the
 # binding and bin/fm-dod-lib.sh owns what it changes for the worker, including
-# the refusal of a forge on local-only.
+# the refusal of a forge on local-only. A forge=external project is refused
+# outright, because its push guard is installed only by a ship spawn.
 # Usage: fm-promote.sh <task-id> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--upstream-consent <host>/<owner>/<repo>]
 # --upstream-consent records the captain's one-off approval for this task to
 # publish to firstmate's own upstream repository; promotion applies the same
@@ -147,6 +153,13 @@ refuse_impossible_forge_posture() {
     echo "error: --yolo on is refused for forge=gerrit: a Code-Review+2 is a positive attributed claim that a named human approved and firstmate must not manufacture one (captain's decision 2026-09-15); promote with --yolo off and take any landing on a current explicit captain instruction naming that concrete change" >&2
     return 1
   fi
+  # A scout launches without the per-task push guard a forge=external ship
+  # carries (bin/fm-spawn.sh), and its task record has no forge=external line
+  # for the ready-report gate, so promotion cannot hand it that contract safely.
+  if [ "$FORGE" = external ]; then
+    echo "error: promotion is refused for forge=external: a scout launches without the push guard and the task record that keep task branches off the shared origin; spawn a fresh ship task with bin/fm-brief.sh --forge external instead" >&2
+    return 1
+  fi
   return 0
 }
 refuse_impossible_forge_posture || exit 1
@@ -235,6 +248,15 @@ if [ "$MODE" != local-only ] && [ -n "$PROMOTE_PROJECT" ]; then
 fi
 PROMOTE_BASE_WORDS='default-branch base'
 [ -z "$BASE_BRANCH" ] || PROMOTE_BASE_WORDS="copy of the base branch \`$BASE_BRANCH\`"
+# A home with config/spawn-base-primary-checkout may have started this scout from
+# the primary checkout's default branch (bin/fm-spawn.sh's header owns that
+# rule), so a publishing mode is told which default branch to return to. Spawn
+# applies that rule only to a project with an origin remote, so a project
+# without one keeps the wording above.
+if [ -z "$BASE_BRANCH" ] && fm_mode_publishes "$MODE" && [ -e "$CONFIG/spawn-base-primary-checkout" ] \
+  && [ -n "$PROMOTE_PROJECT" ] && git -C "$PROMOTE_PROJECT" remote get-url origin >/dev/null 2>&1; then
+  PROMOTE_BASE_WORDS="copy of origin's default branch rather than the primary checkout's, which can carry commits origin has never received"
+fi
 # An unbound project keeps the exact wording it always had.
 PROMOTE_FORGE_WORDS=
 [ "$FORGE" = none ] || PROMOTE_FORGE_WORDS=" forge=$FORGE"

@@ -454,7 +454,6 @@ setup_remote_case() {  # <case-dir> <id> <ssh-mode>
   cat > "$fb/fake-ssh" <<'SH'
 #!/usr/bin/env bash
 set -u
-cat > /dev/null
 while [ "$#" -gt 0 ]; do
   case "$1" in -o) shift 2 ;; --) shift; break ;; *) exit 90 ;; esac
 done
@@ -463,16 +462,17 @@ argv_b64=$4
 decode() { printf '%s' "$1" | base64 --decode 2>/dev/null || printf '%s' "$1" | base64 -D; }
 rargs=()
 while IFS= read -r -d '' a; do rargs+=("$a"); done < <(decode "$argv_b64")
+stdin_payload=$(cat)
 printf '%s\n' "${rargs[*]}" >> "$FM_FAKE_SSH_LOG"
 case "${FM_FAKE_SSH_MODE:-ok}" in
   unreachable) exit 255 ;;
 esac
 case "${rargs[1]:-}" in
-  send)
+  send-stdin)
     # Model the live remote mate: act on the instruction and report back on the
     # parent channel, carrying the correlation token the request embedded.
     if [ -n "${FM_FAKE_ANSWER_STATUS:-}" ]; then
-      corr=$(printf '%s' "${rargs[3]:-}" | grep -oE 'corr=[0-9a-f]{16}' | head -1)
+      corr=$(printf '%s' "$stdin_payload" | grep -oE 'corr=[0-9a-f]{16}' | head -1)
       [ -z "$corr" ] || printf 'done [%s]: open records written down\n' "$corr" \
         >> "$FM_FAKE_ANSWER_STATUS"
     fi
@@ -525,10 +525,89 @@ test_remote_mate_restarts_over_the_transport_hop() {
   [ "$relaunch_line" = "fm-remote-secondmate-control.sh relaunch sm2 codex big-model high" ] \
     || fail "the host-local relaunch did not carry the parent's resolved profile: $relaunch_line"
   # The persist request crossed the SAME hop before the restart did.
-  [ "$(grep -n '^fm-remote-secondmate-control.sh send' "$dir/ssh.log" | head -1 | cut -d: -f1)" \
+  [ "$(grep -n '^fm-remote-secondmate-control.sh send-stdin' "$dir/ssh.log" | head -1 | cut -d: -f1)" \
      -lt "$(grep -n '^fm-remote-secondmate-control.sh relaunch' "$dir/ssh.log" | head -1 | cut -d: -f1)" ] \
     || fail "the remote mate was restarted before it was asked to persist"$'\n'"$(cat "$dir/ssh.log")"
   pass "T6 a remote mate restarts through the host-local control plane over the fm-on hop"
+}
+
+# --- T6b: a per-mate override decides which runtime that mate lands on -------
+# The default line is what a mate without its own override gets; a mate with one
+# gets its own, and an unreadable pin is a per-mate refusal that keeps the
+# running agent instead of migrating it onto whatever the default says today.
+test_remote_restart_lands_on_the_per_mate_pin() {
+  local dir out rc relaunch_line
+  dir=$(new_case matepin)
+  setup_remote_case "$dir" sm2 ok
+  export FM_FAKE_ANSWER_STATUS="$dir/home/state/sm2.status"
+  printf 'codex big-model high\nmate sm2: pi mate-model max\n' > "$dir/home/config/secondmate-harness"
+
+  out=$(run_restart "$dir" sm2); rc=$?
+  unset FM_FAKE_ANSWER_STATUS
+
+  expect_code 0 "$rc" "a mate with its own override should restart onto it"$'\n'"$out"
+  relaunch_line=$(grep '^fm-remote-secondmate-control.sh relaunch' "$dir/ssh.log" | head -1)
+  [ "$relaunch_line" = "fm-remote-secondmate-control.sh relaunch sm2 pi mate-model max" ] \
+    || fail "the mate's own override did not reach the host relaunch: $relaunch_line\n$out"
+  pass "T6a a remote mate with a per-mate override restarts onto that override, not the default pin"
+}
+
+test_remote_restart_uses_the_default_for_an_unpinned_mate() {
+  local dir out rc relaunch_line
+  dir=$(new_case matenopin)
+  setup_remote_case "$dir" sm2 ok
+  export FM_FAKE_ANSWER_STATUS="$dir/home/state/sm2.status"
+  printf 'codex big-model high\nmate some-other-mate: muse other-model low\n' > "$dir/home/config/secondmate-harness"
+
+  out=$(run_restart "$dir" sm2); rc=$?
+  unset FM_FAKE_ANSWER_STATUS
+
+  expect_code 0 "$rc" "a mate with no override should restart onto the default pin"$'\n'"$out"
+  relaunch_line=$(grep '^fm-remote-secondmate-control.sh relaunch' "$dir/ssh.log" | head -1)
+  [ "$relaunch_line" = "fm-remote-secondmate-control.sh relaunch sm2 codex big-model high" ] \
+    || fail "an unpinned mate did not resolve the default pin: $relaunch_line\n$out"
+  pass "T6b a remote mate with no override line still restarts onto the default pin"
+}
+
+# The restart half of the opt-in scope: a pin file that declares no
+# "mate <id>:" line is read exactly as it was before that grammar existed, so a
+# second default line and a fourth token must not stop the restart. The mate
+# still restarts onto the first line's runtime.
+test_remote_restart_with_a_legacy_pin_file_uses_the_first_line() {
+  local dir out rc relaunch_line
+  dir=$(new_case matelegacypin)
+  setup_remote_case "$dir" sm2 ok
+  export FM_FAKE_ANSWER_STATUS="$dir/home/state/sm2.status"
+  printf 'codex big-model high extra\ngrok other-model low\n' > "$dir/home/config/secondmate-harness"
+
+  out=$(run_restart "$dir" sm2); rc=$?
+  unset FM_FAKE_ANSWER_STATUS
+
+  expect_code 0 "$rc" "a legacy pin file must not refuse a restart"$'\n'"$out"
+  relaunch_line=$(grep '^fm-remote-secondmate-control.sh relaunch' "$dir/ssh.log" | head -1)
+  [ "$relaunch_line" = "fm-remote-secondmate-control.sh relaunch sm2 codex big-model high" ] \
+    || fail "the restart did not use the first line of the legacy pin: $relaunch_line\n$out"
+  pass "T6d a legacy pin file still restarts the mate onto its first line"
+}
+
+test_remote_restart_refuses_an_unreadable_per_mate_pin() {
+  local dir out rc
+  dir=$(new_case matebadpin)
+  setup_remote_case "$dir" sm2 ok
+  export FM_FAKE_ANSWER_STATUS="$dir/home/state/sm2.status"
+  printf 'codex big-model high\nmate sm2: pi mate-model max\nmate sm2: muse other-model low\n' > "$dir/home/config/secondmate-harness"
+
+  out=$(run_restart "$dir" sm2); rc=$?
+  unset FM_FAKE_ANSWER_STATUS
+
+  expect_code 3 "$rc" "an unreadable pin is a fallback, never a claimed reload"$'\n'"$out"
+  assert_contains "$out" "its configured runtime pin could not be read" \
+    "the per-mate refusal must name what could not be resolved"
+  assert_contains "$out" "line 3" "the per-mate refusal must carry the pin file's line number"
+  assert_contains "$out" "summary: 0 of 1 restarted" "an unreadable pin must not be reported as a reload"
+  [ -z "$(grep '^fm-remote-secondmate-control.sh relaunch' "$dir/ssh.log" || true)" ] \
+    || fail "a mate with an unreadable pin must not be restarted over the transport hop"
+  pass "T6c an unreadable per-mate pin falls back to the re-read path with its agent left running"
 }
 
 # --- T7: an unreachable host is unknown, never a claimed reload --------------
@@ -857,6 +936,10 @@ test_refused_restart_falls_back_without_claiming_a_reload
 test_local_restart_uses_the_home_pin_and_reports_what_ran
 test_native_ultra_restart_keeps_local_and_remote_profiles
 test_remote_mate_restarts_over_the_transport_hop
+test_remote_restart_lands_on_the_per_mate_pin
+test_remote_restart_uses_the_default_for_an_unpinned_mate
+test_remote_restart_with_a_legacy_pin_file_uses_the_first_line
+test_remote_restart_refuses_an_unreadable_per_mate_pin
 test_unreachable_host_is_reported_unknown
 test_concurrent_reply_cannot_release_persist_gate
 test_persist_waits_are_polled_together
