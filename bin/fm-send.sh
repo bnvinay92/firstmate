@@ -121,9 +121,13 @@
 # idempotent while allowing a later identical instruction to be distinct.
 #
 # Remote secondmate delivery: the send crosses fm-on.sh to a host-local leg
-# (bin/fm-remote-secondmate-control.sh cmd_send) that writes the message as a
+# (bin/fm-remote-secondmate-control.sh cmd_send_stdin) that writes the message as a
 # durable record into the remote home's steering inbox and rings the remote
-# doorbell, best-effort. The remote record is the delivery, exactly as it is
+# doorbell, best-effort. The message body travels on the leg's stdin, never as
+# an SSH exec argument, so its size is not bounded by remote argv limits; the
+# distinct send-stdin verb makes an older remote code root reject the call
+# with a usage error instead of misreading the mode word as the body.
+# The remote record is the delivery, exactly as it is
 # locally: leg exit 0 means durably recorded (fm-send then exits 0, marks the
 # pending-reply expectation delivered, and closes any --resolve-key
 # decisions), and any real remote failure fails loudly with the remote leg's
@@ -941,7 +945,7 @@ else
     fi
     remote_rc=0
     remote_completion_unknown=0
-    REMOTE_SEND_ARGS=("$TARGET_REMOTE_ID" "$MESSAGE")
+    REMOTE_SEND_ARGS=("$TARGET_REMOTE_ID")
     [ -z "$FIRE_AND_FORGET_ID" ] || REMOTE_SEND_ARGS+=(fire-and-forget)
     # Each transport attempt is bounded by FM_SEND_REMOTE_BUDGET seconds.
     # fm_run_timed's 124 means the attempt was killed at the bound with remote
@@ -954,15 +958,15 @@ else
     # the worker control script, a remote secondmate through its own route
     # (bin/fm-remote-worker-lib.sh owns that choice); the leg is the same.
     fm_remote_route_for_meta "$TARGET_META" "$TARGET_REMOTE_ID"
-    fm_run_timed "$FM_SEND_REMOTE_BUDGET" "$SCRIPT_DIR/fm-on.sh" "${FM_REMOTE_ROUTE[@]}" \
-      send "${REMOTE_SEND_ARGS[@]}" </dev/null || remote_rc=$?
+    printf '%s' "$MESSAGE" | fm_run_timed "$FM_SEND_REMOTE_BUDGET" "$SCRIPT_DIR/fm-on.sh" --stdin \
+      "${FM_REMOTE_ROUTE[@]}" send-stdin "${REMOTE_SEND_ARGS[@]}" || remote_rc=$?
     if [ "$remote_rc" -eq 124 ]; then
       remote_completion_unknown=1
     elif [ "$remote_rc" -eq 255 ]; then
       remote_completion_unknown=1
       remote_rc=0
-      fm_run_timed "$FM_SEND_REMOTE_BUDGET" "$SCRIPT_DIR/fm-on.sh" "${FM_REMOTE_ROUTE[@]}" \
-        send "${REMOTE_SEND_ARGS[@]}" </dev/null || remote_rc=$?
+      printf '%s' "$MESSAGE" | fm_run_timed "$FM_SEND_REMOTE_BUDGET" "$SCRIPT_DIR/fm-on.sh" --stdin \
+        "${FM_REMOTE_ROUTE[@]}" send-stdin "${REMOTE_SEND_ARGS[@]}" || remote_rc=$?
     fi
     fm_lock_release "$REMOTE_META_LOCK"
     if [ "$remote_rc" -ne 0 ] && [ "$remote_completion_unknown" -eq 1 ]; then
