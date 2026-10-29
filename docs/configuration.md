@@ -473,7 +473,7 @@ The file is a home-local relay preference and is not inherited by secondmate hom
 
 ## Routine PR outcomes (config/routine-pr-outcomes)
 
-The optional local, gitignored `config/routine-pr-outcomes` file is for a captain who watches open pull requests somewhere other than chat, such as the [fleet pane mod](../mods/fleet-pane/README.md).
+The optional local, gitignored `config/routine-pr-outcomes` file is for a captain who watches open pull requests somewhere other than chat, such as the [fleet pane](fleet-pane.md).
 Its presence opts the home in, whatever it holds; nothing infers it from whether a pane or mod is installed, and without it every event below reaches main exactly as before.
 While it is present, an event whose only news is a pull request's state opens no main turn:
 
