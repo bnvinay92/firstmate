@@ -530,14 +530,30 @@ fm_backlog_pr_note_label() {  # <url>
     esac )
 }
 
+# tasks-axi records every --pr link as merged, so bin/fm-teardown.sh passes a
+# GitHub or Forgejo pull request it could not prove merged under one of these
+# flags instead, and the row closes with a note naming the PR's state. Prints
+# that note for such a flag and fails for any other.
+fm_backlog_pr_state_note() {  # <flag> <url>
+  case "$1" in
+    --pr-closed) printf 'PR closed unmerged: %s\n' "$2" ;;
+    --pr-open) printf 'PR open unmerged: %s\n' "$2" ;;
+    --pr-unknown) printf 'PR state unknown: %s\n' "$2" ;;
+    *) return 1 ;;
+  esac
+}
+
 fm_backlog_done() {  # <data-dir> <id> [flag...]
-  local data=$1 id=$2 arg label previous_arg=''
+  local data=$1 id=$2 arg label note previous_arg=''
   local -a done_args=()
   shift 2
   for arg in "$@"; do
     if [ "$previous_arg" = --pr ] && label=$(fm_backlog_pr_note_label "$arg"); then
       done_args[${#done_args[@]}-1]=--note
       done_args+=("$label $arg")
+    elif note=$(fm_backlog_pr_state_note "$previous_arg" "$arg"); then
+      done_args[${#done_args[@]}-1]=--note
+      done_args+=("$note")
     else
       done_args+=("$arg")
     fi
@@ -587,6 +603,9 @@ fm_backlog_retain() {  # <data-dir> <id> [flag...]
         else
           deliverable="${deliverable:+$deliverable; }$(fm_backlog_pr_note_label "$arg") $arg"
         fi
+        ;;
+      --pr-closed|--pr-open|--pr-unknown)
+        deliverable="${deliverable:+$deliverable; }$(fm_backlog_pr_state_note "$previous_arg" "$arg")"
         ;;
       --note) deliverable="${deliverable:+$deliverable; }$arg" ;;
     esac
@@ -984,7 +1003,7 @@ fm_backlog_close_marker_validate() {  # <marker-path> <authorized-data-dir> <exp
     2)
       case "${args[0]}" in
         --note) [ "${args[1]}" = "local%20main" ] ;;
-        --pr)
+        --pr|--pr-closed|--pr-open|--pr-unknown)
           arg_value=${args[1]}
           [ "${#arg_value}" -le 2048 ] \
             && case "$arg_value" in https://*) true ;; *) false ;; esac \
