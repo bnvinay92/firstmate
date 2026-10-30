@@ -5809,7 +5809,12 @@ preserve_relaunch_meta() {
       split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort opencode_version account account_provider omp_profile busy_gen spawn_gen approval_mode traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
-    !($1 in owned)
+    $1 in owned { next }
+    # The pr=/pr_head= block stays last: fm_pr_metadata_identity_parse
+    # refuses a record with any other key after pr=.
+    $1 == "pr" || $1 == "pr_head" { pr_block[++pr_lines] = $0; next }
+    { print }
+    END { for (i = 1; i <= pr_lines; i++) print pr_block[i] }
   ' "$RELAUNCH_META"
 }
 {
@@ -5878,11 +5883,12 @@ preserve_relaunch_meta() {
     echo "home=$PROJ_ABS"
     echo "projects=$SECONDMATE_PROJECTS"
   fi
-  if [ "$RELAUNCH" -eq 1 ]; then
-    preserve_relaunch_meta
-  fi
   if [ "$SPAWN_CONTROL_PARENT" = 1 ] && [ -n "${FM_CONTROL_RELAUNCH_TX:-}" ]; then
     echo "control_relaunch_tx=$FM_CONTROL_RELAUNCH_TX"
+  fi
+  # Preserved lines come last so their pr= block ends the record.
+  if [ "$RELAUNCH" -eq 1 ]; then
+    preserve_relaunch_meta
   fi
 } >"$SPAWN_META_PATH" || {
   echo "error: task record for $ID could not be prepared at $SPAWN_META_PATH" >&2
