@@ -1236,6 +1236,47 @@ remote_secondmate_teardown_locked() {
   return "$rc"
 }
 
+# Set by pr_is_merged once the forge has proven PR_URL merged during the
+# landed-work check, so the backlog close below need not read it again.
+PR_PROVEN_MERGED=0
+
+# The completion link a ship's PR contributes to its backlog close.
+# tasks-axi records every --pr link as "(merged DATE)", so a GitHub or Forgejo
+# pull request is passed as --pr only when the forge proves it merged, and
+# otherwise under the flag naming its closed, open, or unreadable state
+# (fm_backlog_pr_state_note), so a pushed branch whose PR was closed unmerged
+# is never recorded as merged. Gerrit and GitLab URLs already close as a plain
+# note (fm_backlog_done) and are passed through.
+# Decided before the pending close marker is written, because the marker
+# replays these exact arguments.
+PR_DONE_ARGS=()
+pr_done_args() {  # <url>
+  local url=$1 record state merged
+  PR_DONE_ARGS=(--pr "$url")
+  [ "$PR_PROVEN_MERGED" = 1 ] && [ "$url" = "$PR_URL" ] && return 0
+  fm_backlog_pr_note_label "$url" >/dev/null && return 0
+  # shellcheck disable=SC2016  # The inner script expands after bash -c receives positional args.
+  if record=$(fm_run_timed 10 bash -c '
+      . "$1"
+      fm_pr_url_parse "$2" || exit 1
+      case "$FM_PR_PROVIDER" in
+        github) fm_pr_github_read_record "$FM_PR_HOST" "$FM_PR_OWNER" "$FM_PR_REPO" "$FM_PR_NUMBER" || exit 1 ;;
+        forgejo) fm_pr_forgejo_read_record "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" || exit 1 ;;
+        *) exit 1 ;;
+      esac
+      printf "state=%s\nmerged=%s\n" "$FM_PR_RECORD_STATE" "$FM_PR_RECORD_MERGED"
+    ' _ "$SCRIPT_DIR/fm-pr-lib.sh" "$url" 2>/dev/null); then
+    state=$(printf '%s\n' "$record" | sed -n 's/^state=//p' | head -1)
+    merged=$(printf '%s\n' "$record" | sed -n 's/^merged=//p' | head -1)
+  fi
+  [ "${merged:-}" = true ] && return 0
+  case "${merged:-}:${state:-}" in
+    false:CLOSED|false:closed) PR_DONE_ARGS=(--pr-closed "$url") ;;
+    false:OPEN|false:open) PR_DONE_ARGS=(--pr-open "$url") ;;
+    *) PR_DONE_ARGS=(--pr-unknown "$url") ;;
+  esac
+}
+
 # A ship or scout worker placed on a worker machine (remote_kind=worker;
 # docs/remote-workers.md) is cleaned up THERE: the machine runs this same script
 # against the worker's host-local record, so the landed-work test reads the
@@ -1321,7 +1362,8 @@ remote_worker_teardown() {
       data_relative=$(fm_backlog_data_relative "$DATA") || return 1
       done_args=(--report "$data_relative/$ID/report.md")
     elif [ -n "$pr_url" ]; then
-      done_args=(--pr "$pr_url")
+      pr_done_args "$pr_url"
+      done_args=("${PR_DONE_ARGS[@]}")
     fi
     flags=()
     [ "$TEARDOWN_BACKLOG_TRANSITION" = close ] || flags=(--retain)
@@ -1694,6 +1736,7 @@ pr_is_merged() {
     [ -n "$resolved_url" ] || return 1
     PR_URL=$resolved_url
   fi
+  PR_PROVEN_MERGED=1
   return 0
 }
 
@@ -1746,7 +1789,8 @@ work_is_landed() {
 
 # The completion links this teardown already holds locally. A scout's
 # deliverable is its report, a local-only ship lands on local main, and every
-# other ship carries the PR recorded on its own record.
+# other ship carries the PR recorded on its own record, linked as merged only
+# when pr_done_args proves it.
 BACKLOG_DONE_ARGS=()
 backlog_done_args() {
   local data_relative
@@ -1760,7 +1804,8 @@ backlog_done_args() {
       if [ "$MODE" = local-only ]; then
         BACKLOG_DONE_ARGS=(--note "local main")
       elif [ -n "$PR_URL" ]; then
-        BACKLOG_DONE_ARGS=(--pr "$PR_URL")
+        pr_done_args "$PR_URL"
+        BACKLOG_DONE_ARGS=("${PR_DONE_ARGS[@]}")
       fi
       ;;
   esac
