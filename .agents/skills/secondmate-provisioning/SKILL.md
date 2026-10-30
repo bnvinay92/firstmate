@@ -252,6 +252,7 @@ If `treehouse return` fails for a leased home, teardown stops with state intact 
 Before either return or direct removal, teardown asks the target home's process-event runner to retire its registrations and physically owned machine-wide claims through the safe generation-bound path.
 It refuses retirement while that cleanup is uncertain or unavailable, preserving the home and retirement records for a later retry.
 Raw deletion is unsupported because a blocking process-event child can outlive its home.
+A mate seeded but never launched has a route and a marked home but no main-home metadata; the same `bin/fm-teardown.sh <id>` retires its home and route, and its header owns what that path refuses.
 
 With `--force`, teardown is the explicit discard path.
 The worktree-slot ownership contract in `bin/fm-teardown.sh` still applies: `--force` never authorizes returning a descendant pool slot that another task may own.
