@@ -1216,6 +1216,9 @@ apply_pending_retained_artifact() {  # <task-id>
       fm_backlog_mutate "$DATA" update "$id" "${args[@]}" \
         || { report_retained_artifact_failure "$id" "$marker"; return 1; }
       ;;
+    --pr-closed|--pr-open|--pr-unknown)
+      RETAINED_CLOSE_ARGS=(--note "$(fm_backlog_pr_state_note "${args[@]}")")
+      ;;
   esac
 }
 
