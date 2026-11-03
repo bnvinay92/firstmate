@@ -1648,6 +1648,93 @@ EOF
   pass "secondmate teardown retires empty homes and releases routing"
 }
 
+# Seed a leased secondmate home through bin/fm-home-seed.sh and never launch it,
+# so the parent holds a route and a marked home but no state/<id>.meta.
+# Prints the seeded home's resolved path.
+seed_unlaunched_secondmate() {
+  local name=$1 id=$2 home fmroot acquired fakebin log lease
+  home="$TMP_ROOT/$name-home"
+  fmroot="$TMP_ROOT/$name-fmroot"
+  acquired="$TMP_ROOT/$name-acquired"
+  make_firstmate_git_root "$fmroot"
+  git -C "$fmroot" worktree add --quiet --detach "$acquired" HEAD
+  mkdir -p "$home/projects" "$home/data" "$home/state"
+  fm_git_init_commit "$home/projects/alpha"
+  fm_git_add_origin "$home/projects/alpha" "$TMP_ROOT/remotes/$name-alpha.git"
+  printf '%s\n' '- alpha [direct-PR] - alpha project (added 2026-06-22)' > "$home/data/projects.md"
+  fakebin=$(make_fake_tmux "$TMP_ROOT/$name-fake")
+  log="$TMP_ROOT/$name-fake/tmux.log"
+  lease="$TMP_ROOT/$name-fake/lease"
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_FAKE_TREEHOUSE_HOME="$acquired" FM_FAKE_TMUX_LOG="$log" \
+    FM_FAKE_TREEHOUSE_LEASE_FILE="$lease" \
+    FM_SECONDMATE_CHARTER="$id scope" FM_SECONDMATE_SCOPE="$id scope" \
+    "$ROOT/bin/fm-home-seed.sh" "$id" - alpha >/dev/null 2>&1 \
+    || fail "could not seed the unlaunched secondmate $id"
+  [ ! -e "$home/state/$id.meta" ] || fail "seeding alone published a task record for $id"
+  [ "$(cat "$lease")" = "$id" ] || fail "seeding did not lease the home under $id"
+  grep -F -- "- $id " "$home/data/secondmates.md" >/dev/null || fail "seeding did not route $id"
+  cd "$acquired" && pwd -P
+}
+
+test_secondmate_teardown_retires_never_launched_home() {
+  local name=unlaunched-retire home acquired fmroot fakebin log lease out rc=0
+  home="$TMP_ROOT/$name-home"
+  fmroot="$TMP_ROOT/$name-fmroot"
+  acquired=$(seed_unlaunched_secondmate "$name" vect) || fail "could not seed the never-launched secondmate"
+  fakebin="$TMP_ROOT/$name-fake/fakebin"
+  log="$TMP_ROOT/$name-fake/tmux.log"
+  lease="$TMP_ROOT/$name-fake/lease"
+  : > "$log"
+
+  out=$(PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$fmroot" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" \
+    FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/$name-fake/pane.txt" FM_FAKE_TREEHOUSE_LEASE_FILE="$lease" \
+    "$ROOT/bin/fm-teardown.sh" vect 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] || fail "teardown of a never-launched secondmate failed (rc=$rc): $out"
+  grep -F "treehouse return --force $acquired" "$log" >/dev/null \
+    || fail "teardown did not return the never-launched home's lease through treehouse"
+  [ ! -e "$lease" ] || fail "teardown left the never-launched home's lease held"
+  [ ! -d "$acquired" ] || fail "teardown did not remove the never-launched home"
+  grep -F -- '- vect ' "$home/data/secondmates.md" >/dev/null \
+    && fail "teardown did not remove the never-launched secondmate's route"
+  grep -F 'tmux kill' "$log" >/dev/null && fail "teardown tried to close an endpoint a never-launched secondmate never had"
+  pass "teardown retires a seeded secondmate that was never launched: route removed, lease returned, home gone"
+}
+
+test_secondmate_teardown_refuses_never_launched_home_with_records() {
+  local name=unlaunched-refuse home acquired fmroot fakebin log lease out rc force
+  home="$TMP_ROOT/$name-home"
+  fmroot="$TMP_ROOT/$name-fmroot"
+  acquired=$(seed_unlaunched_secondmate "$name" vect) || fail "could not seed the never-launched secondmate"
+  fakebin="$TMP_ROOT/$name-fake/fakebin"
+  log="$TMP_ROOT/$name-fake/tmux.log"
+  lease="$TMP_ROOT/$name-fake/lease"
+  : > "$log"
+  printf 'kind=ship\n' > "$acquired/state/x.meta"
+  for force in '' --force; do
+    rc=0
+    out=$(PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$fmroot" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" \
+      FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/$name-fake/pane.txt" FM_FAKE_TREEHOUSE_LEASE_FILE="$lease" \
+      "$ROOT/bin/fm-teardown.sh" vect ${force:+"$force"} 2>&1) || rc=$?
+    [ "$rc" -ne 0 ] || fail "teardown ${force:-without --force} retired a never-launched home that holds a task record"
+    printf '%s\n' "$out" | grep -F 'holds task record x.meta' >/dev/null \
+      || fail "teardown ${force:-without --force} did not name the child task record: $out"
+  done
+  rm -f "$acquired/state/x.meta"
+  printf 'pending\n' > "$home/state/.backlog-handoff-vect.wake-pending"
+  rc=0
+  out=$(PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$fmroot" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" \
+    FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/$name-fake/pane.txt" FM_FAKE_TREEHOUSE_LEASE_FILE="$lease" \
+    "$ROOT/bin/fm-teardown.sh" vect 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "teardown retired a never-launched home with a pending backlog handoff"
+  printf '%s\n' "$out" | grep -F 'pending backlog handoff' >/dev/null \
+    || fail "teardown did not explain the pending backlog handoff: $out"
+  grep -F 'treehouse return' "$log" >/dev/null && fail "a refused never-launched teardown returned the home"
+  [ "$(cat "$lease")" = vect ] || fail "a refused never-launched teardown released the lease"
+  [ -f "$acquired/.fm-secondmate-home" ] || fail "a refused never-launched teardown removed the home"
+  grep -F -- '- vect ' "$home/data/secondmates.md" >/dev/null || fail "a refused never-launched teardown removed the route"
+  pass "teardown of a never-launched secondmate refuses, changing nothing, while its home holds a task record or a handoff is pending"
+}
+
 # A second mate's status log relays child outcomes, so a merged child PR there
 # must never let the supervision branch retire the mate itself.
 test_branch_actor_cannot_retire_secondmate() {
@@ -3126,6 +3213,8 @@ test_secondmate_spawn_requires_seeded_matching_home
 test_secondmate_spawn_refuses_operational_dirs_outside_subhome
 test_fm_send_refuses_bare_window_without_home_meta
 test_secondmate_teardown_retires_empty_home
+test_secondmate_teardown_retires_never_launched_home
+test_secondmate_teardown_refuses_never_launched_home_with_records
 test_branch_actor_cannot_retire_secondmate
 test_secondmate_teardown_refuses_ambiguous_and_mismatched_registry_bindings
 test_secondmate_teardown_sweeps_process_events_before_removal
