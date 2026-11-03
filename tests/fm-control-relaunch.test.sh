@@ -27,6 +27,8 @@ set -u
 . "$ROOT/bin/fm-trace-context-lib.sh"
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-tasks-axi-lib.sh"
+# shellcheck source=/dev/null
+. "$ROOT/bin/fm-pr-lib.sh"
 
 CONTROL="$ROOT/bin/fm-control.sh"
 SPAWN="$ROOT/bin/fm-spawn.sh"
@@ -504,23 +506,50 @@ test_relaunch_preserves_durable_task_metadata() {
   dir=$(new_case durable-meta rl19)
   add_ship_task "$dir" rl19 claude
   {
-    printf '%s\n' 'pr=https://github.com/example/repo/pull/19'
-    printf '%s\n' 'pr_head=feature/relaunch'
     printf '%s\n' 'probe_link=request-19'
     printf '%s\n' 'decisions_reviewed=1'
+    printf '%s\n' 'pr=https://github.com/example/repo/pull/19'
+    printf '%s\n' 'pr_head=0123456789abcdef0123456789abcdef01234567'
   } >> "$dir/home/state/rl19.meta"
+  fm_pr_metadata_identity_parse "$dir/home/state/rl19.meta" \
+    || fail "the fixture PR identity must parse before relaunch"
 
   out=$(run_control "$dir" rl19 relaunch --note "continuing review work"); rc=$?
   expect_code 0 "$rc" "relaunch should preserve durable metadata"$'\n'"$out"
   [ "$(meta_field "$dir" rl19 pr)" = "https://github.com/example/repo/pull/19" ] \
     || fail "the task PR must survive relaunch"
-  [ "$(meta_field "$dir" rl19 pr_head)" = "feature/relaunch" ] \
+  [ "$(meta_field "$dir" rl19 pr_head)" = "0123456789abcdef0123456789abcdef01234567" ] \
     || fail "the task PR head must survive relaunch"
+  fm_pr_metadata_identity_parse "$dir/home/state/rl19.meta" \
+    || fail "the task PR identity must still parse after relaunch"$'\n'"$(cat "$dir/home/state/rl19.meta")"
+  [ "$FM_PR_META_NUMBER" = 19 ] || fail "the relaunched PR identity must name the task PR"
   [ "$(meta_field "$dir" rl19 probe_link)" = "request-19" ] \
     || fail "an unrelated durable task field must survive relaunch"
   [ "$(meta_field "$dir" rl19 decisions_reviewed)" = 1 ] \
     || fail "the task decision state must survive relaunch"
   pass "fm-control relaunch: durable task metadata survives replacement launch publication"
+}
+
+test_relaunch_moves_the_pr_block_back_to_the_end_of_the_record() {
+  local dir out rc
+  dir=$(new_case pr-order rl91)
+  add_ship_task "$dir" rl91 claude
+  {
+    printf '%s\n' 'pr=https://github.com/example/repo/pull/91'
+    printf '%s\n' 'pr_head=0123456789abcdef0123456789abcdef01234567'
+    printf '%s\n' 'probe_link=request-91'
+    printf '%s\n' 'control_relaunch_tx=1.20260101T000000Z.1'
+  } >> "$dir/home/state/rl91.meta"
+
+  out=$(run_control "$dir" rl91 relaunch --note "continuing review work"); rc=$?
+  expect_code 0 "$rc" "relaunch should accept a record whose PR block is not last"$'\n'"$out"
+  fm_pr_metadata_identity_parse "$dir/home/state/rl91.meta" \
+    || fail "relaunch must leave the PR block last so the PR identity parses"$'\n'"$(cat "$dir/home/state/rl91.meta")"
+  [ "$(tail -1 "$dir/home/state/rl91.meta")" = "pr_head=0123456789abcdef0123456789abcdef01234567" ] \
+    || fail "the PR head must end the relaunched record"
+  [ "$(meta_field "$dir" rl91 probe_link)" = "request-91" ] \
+    || fail "a durable field written after the PR must survive relaunch"
+  pass "fm-control relaunch: a record with fields after its PR block is rewritten with the PR block last"
 }
 
 test_relaunch_serializes_concurrent_durable_metadata_publication() {
@@ -1739,7 +1768,9 @@ test_prepublication_failure_keeps_concurrent_durable_metadata() {
     run_control "$dir" rl30 relaunch --harness codex --note "preserve concurrent metadata" \
       > "$dir/control.out" &
   control_pid=$!
-  while [ ! -e "$dir/cwd-race-ready" ] && [ "$i" -lt 200 ]; do
+  # A readiness budget, not a timing assertion: a loaded host can take tens of
+  # seconds to reach the endpoint check, and only a real hang pays the full wait.
+  while [ ! -e "$dir/cwd-race-ready" ] && [ "$i" -lt 6000 ]; do
     /bin/sleep 0.01
     i=$((i + 1))
   done
@@ -2866,6 +2897,7 @@ test_relaunch_refuses_before_exit_when_the_composer_holds_pending_text
 test_relaunch_refuses_before_exit_when_the_composer_state_is_unproven
 test_relaunch_from_linked_home_preserves_recorded_worktree
 test_relaunch_preserves_durable_task_metadata
+test_relaunch_moves_the_pr_block_back_to_the_end_of_the_record
 test_relaunch_serializes_concurrent_durable_metadata_publication
 test_disabled_relaunch_clears_prior_trace_context
 test_relaunch_appends_the_progress_note_to_the_instructions
